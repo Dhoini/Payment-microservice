@@ -28,6 +28,11 @@ func NewPaymentHandler(log *logger.Logger) *PaymentHandler {
 	}
 }
 
+// GetService возвращает сервис платежей
+func (h *PaymentHandler) GetService() service.PaymentService {
+	return h.service
+}
+
 // GetPayments возвращает список всех платежей
 func (h *PaymentHandler) GetPayments(c *gin.Context) {
 	// Проверяем, если есть параметр запроса customer_id

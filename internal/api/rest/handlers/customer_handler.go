@@ -27,6 +27,11 @@ func NewCustomerHandler(log *logger.Logger) *CustomerHandler {
 	}
 }
 
+// GetService возвращает сервис клиентов
+func (h *CustomerHandler) GetService() service.CustomerService {
+	return h.service
+}
+
 // GetCustomers возвращает список всех клиентов
 func (h *CustomerHandler) GetCustomers(c *gin.Context) {
 	customers, err := h.service.GetAll(c.Request.Context())

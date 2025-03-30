@@ -12,6 +12,7 @@ type Config struct {
 	Database DatabaseConfig
 	Logging  LoggingConfig
 	GRPC     GRPCConfig
+	Stripe   StripeConfig
 }
 
 // ServerConfig конфигурация HTTP сервера
@@ -44,6 +45,15 @@ type GRPCConfig struct {
 	UseTLS   bool
 	CertFile string
 	KeyFile  string
+}
+
+// StripeConfig конфигурация Stripe
+type StripeConfig struct {
+	APIKey             string
+	WebhookSecret      string
+	IsTest             bool
+	EnableWebhooks     bool
+	WebhookEndpointURL string
 }
 
 // GetDSN возвращает строку подключения к базе данных
@@ -80,6 +90,13 @@ func Load() (*Config, error) {
 			UseTLS:   getEnvAsBool("GRPC_USE_TLS", false),
 			CertFile: getEnv("GRPC_CERT_FILE", ""),
 			KeyFile:  getEnv("GRPC_KEY_FILE", ""),
+		},
+		Stripe: StripeConfig{
+			APIKey:             getEnv("STRIPE_API_KEY", ""),
+			WebhookSecret:      getEnv("STRIPE_WEBHOOK_SECRET", ""),
+			IsTest:             getEnvAsBool("STRIPE_IS_TEST", true),
+			EnableWebhooks:     getEnvAsBool("ENABLE_WEBHOOKS", true),
+			WebhookEndpointURL: getEnv("STRIPE_WEBHOOK_ENDPOINT_URL", ""),
 		},
 	}
 

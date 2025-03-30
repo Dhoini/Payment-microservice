@@ -1,14 +1,104 @@
 syntax = "proto3";
 
-package customer.v1;
+package payment.v1;
 
-option go_package = "github.com/Dhoini/Payment-microservice/proto/customer/v1;customerpb";
+option go_package = "github.com/Dhoini/Payment-microservice/proto/payment/v1;paymentpb";
 
 import "google/protobuf/timestamp.proto";
 
-// CustomerService предоставляет API для управления клиентами
-service CustomerService {
-  // CreateCustomer создает нового клиента
-  rpc CreateCustomer(CreateCustomerRequest) returns (CustomerResponse) {}
+// PaymentService предоставляет API для управления платежами
+service PaymentService {
+  // CreatePayment создает новый платеж
+  rpc CreatePayment(CreatePaymentRequest) returns (PaymentResponse) {}
 
-// GetCustomer возвращает информацию о клиенте по
+  // GetPayment возвращает информацию о платеже по ID
+  rpc GetPayment(GetPaymentRequest) returns (PaymentResponse) {}
+
+  // ListPayments возвращает список платежей
+  rpc ListPayments(ListPaymentsRequest) returns (ListPaymentsResponse) {}
+
+  // UpdatePaymentStatus обновляет статус платежа
+  rpc UpdatePaymentStatus(UpdatePaymentStatusRequest) returns (PaymentResponse) {}
+
+  // ListPaymentsByCustomer возвращает список платежей для клиента
+  rpc ListPaymentsByCustomer(ListPaymentsByCustomerRequest) returns (ListPaymentsResponse) {}
+
+  // RefundPayment создает возврат платежа
+  rpc RefundPayment(RefundPaymentRequest) returns (PaymentResponse) {}
+}
+
+// CreatePaymentRequest запрос на создание платежа
+message CreatePaymentRequest {
+  string customer_id = 1;
+  double amount = 2;
+  string currency = 3;
+  string description = 4;
+  string method_id = 5;
+  map<string, string> metadata = 6;
+}
+
+// GetPaymentRequest запрос на получение платежа
+message GetPaymentRequest {
+  string id = 1;
+}
+
+// ListPaymentsRequest запрос на получение списка платежей
+message ListPaymentsRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+  PaymentStatus status = 3;
+}
+
+// UpdatePaymentStatusRequest запрос на обновление статуса платежа
+message UpdatePaymentStatusRequest {
+  string id = 1;
+  PaymentStatus status = 2;
+}
+
+// ListPaymentsByCustomerRequest запрос на получение платежей клиента
+message ListPaymentsByCustomerRequest {
+  string customer_id = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+  PaymentStatus status = 4;
+}
+
+// RefundPaymentRequest запрос на возврат платежа
+message RefundPaymentRequest {
+  string payment_id = 1;
+  double amount = 2;
+  string reason = 3;
+}
+
+// PaymentResponse ответ с информацией о платеже
+message PaymentResponse {
+  string id = 1;
+  string customer_id = 2;
+  double amount = 3;
+  string currency = 4;
+  string description = 5;
+  PaymentStatus status = 6;
+  string method_id = 7;
+  string method_type = 8;
+  string transaction_id = 9;
+  string receipt_url = 10;
+  string error_message = 11;
+  map<string, string> metadata = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+// ListPaymentsResponse ответ со списком платежей
+message ListPaymentsResponse {
+  repeated PaymentResponse payments = 1;
+  int32 total = 2;
+}
+
+// PaymentStatus статус платежа
+enum PaymentStatus {
+  PAYMENT_STATUS_UNSPECIFIED = 0;
+  PAYMENT_STATUS_PENDING = 1;
+  PAYMENT_STATUS_COMPLETED = 2;
+  PAYMENT_STATUS_FAILED = 3;
+  PAYMENT_STATUS_REFUNDED = 4;
+}

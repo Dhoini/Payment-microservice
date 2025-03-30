@@ -10,7 +10,6 @@ import (
 	"github.com/Dhoini/Payment-microservice/config"
 	"github.com/Dhoini/Payment-microservice/internal/api/rest"
 	"github.com/Dhoini/Payment-microservice/internal/kafka"
-	"github.com/Dhoini/Payment-microservice/internal/kafka/producer"
 	"github.com/Dhoini/Payment-microservice/internal/metrics"
 	"github.com/Dhoini/Payment-microservice/internal/repository/postgres"
 	"github.com/Dhoini/Payment-microservice/pkg/logger"
@@ -49,7 +48,7 @@ func main() {
 
 	// Инициализация Prometheus
 	promRegistry := prometheus.NewRegistry()
-	paymentMetrics := metrics.NewPaymentMetrics(promRegistry, log)
+	// paymentMetrics := metrics.NewPaymentMetrics(promRegistry, log) // закомментировать, если не используется
 	systemMetrics := metrics.NewSystemMetrics(promRegistry, log)
 
 	// Запускаем сбор системных метрик
@@ -73,7 +72,7 @@ func main() {
 	}
 	defer kafkaProducer.Close()
 
-	paymentProducer := producer.NewKafkaPaymentProducer(kafkaProducer, log)
+	//paymentProducer := producer.NewKafkaPaymentProducer(kafkaProducer, log)
 
 	// Установка режима Gin
 	if os.Getenv("GIN_MODE") == "release" {
@@ -81,7 +80,7 @@ func main() {
 	}
 
 	// Настройка маршрутизатора
-	router := rest.SetupRouter(log, promRegistry)
+	router := rest.SetupRouter(log, promRegistry, cfg)
 
 	// Создание и запуск HTTP сервера
 	server := rest.NewServer(router, cfg, log)
