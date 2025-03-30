@@ -38,6 +38,8 @@ func SetupRouter(log *logger.Logger, registry *prometheus.Registry, cfg *config.
 	customerHandler := handlers.NewCustomerHandler(log)
 	paymentHandler := handlers.NewPaymentHandler(log)
 	webhookHandler := handlers.NewWebhookHandler(stripeWebhookHandler, paymentHandler.GetService(), customerHandler.GetService(), log)
+	subscriptionHandler := handlers.NewSubscriptionHandler(log, customerHandler.GetService(), paymentHandler.GetService())
+
 	// API для платежей
 	v1 := r.Group("/api/v1")
 	{
@@ -59,6 +61,27 @@ func SetupRouter(log *logger.Logger, registry *prometheus.Registry, cfg *config.
 			payments.POST("", paymentHandler.CreatePayment)
 			payments.PUT("/:id", paymentHandler.UpdatePayment)
 		}
+
+		// Подписки
+		subscriptions := v1.Group("/subscriptions")
+		{
+			subscriptions.GET("", subscriptionHandler.GetSubscriptions)
+			subscriptions.GET("/:id", subscriptionHandler.GetSubscription)
+			subscriptions.POST("", subscriptionHandler.CreateSubscription)
+			subscriptions.POST("/:id/cancel", subscriptionHandler.CancelSubscription)
+			subscriptions.POST("/:id/pause", subscriptionHandler.PauseSubscription)
+			subscriptions.POST("/:id/resume", subscriptionHandler.ResumeSubscription)
+		}
+		// Планы подписок
+		plans := v1.Group("/subscription-plans")
+		{
+			plans.GET("", subscriptionHandler.GetPlans)
+			plans.GET("/:id", subscriptionHandler.GetPlan)
+			plans.POST("", subscriptionHandler.CreatePlan)
+			plans.PUT("/:id", subscriptionHandler.UpdatePlan)
+			plans.DELETE("/:id", subscriptionHandler.DeletePlan)
+		}
+
 	}
 
 	// Вебхуки на корневом уровне роутера

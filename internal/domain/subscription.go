@@ -68,3 +68,15 @@ type SubscriptionRequest struct {
 	DefaultPaymentMethodID string            `json:"default_payment_method_id,omitempty"`
 	Metadata               map[string]string `json:"metadata,omitempty"`
 }
+
+// SubscriptionPlanRequest представляет запрос на создание/обновление плана подписки
+type SubscriptionPlanRequest struct {
+	Name            string               `json:"name" binding:"required"`
+	Amount          float64              `json:"amount" binding:"required,gt=0"`
+	Currency        string               `json:"currency" binding:"required,len=3"`
+	Interval        SubscriptionInterval `json:"interval" binding:"required"`
+	IntervalCount   int                  `json:"interval_count" binding:"required,gt=0"`
+	TrialPeriodDays int                  `json:"trial_period_days,omitempty"`
+	Active          bool                 `json:"active"`
+	Metadata        map[string]string    `json:"metadata,omitempty"`
+}
