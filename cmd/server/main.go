@@ -1,15 +1,19 @@
+// cmd/server/main.go
 package main
 
 import (
-	"github.com/Dhoini/Payment-microservice/internal/middleware"
-	"github.com/Dhoini/Payment-microservice/pkg/logger"
-	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
+	"context"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/Dhoini/Payment-microservice/internal/handler"
+	"github.com/Dhoini/Payment-microservice/internal/middleware"
+	"github.com/Dhoini/Payment-microservice/pkg/logger"
+	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
 
 var log *logger.Logger
@@ -40,26 +44,44 @@ func main() {
 	// Подключение middleware
 	r.Use(middleware.LoggerMiddleware(log))
 	r.Use(gin.Recovery())
-	//r.Use(middleware.PrometheusMiddleware())
 
 	// Регистрация маршрутов
-	r.GET("/health", handler.HealthCheck)
+	r.GET("/health", healthCheck)
 
+	// API для платежей
 	v1 := r.Group("/api/v1")
 	{
-		items := v1.Group("/items")
+		// Платежи
+		payments := v1.Group("/payments")
 		{
-			itemHandler := handler.NewItemHandler(log)
-			items.GET("", itemHandler.GetItems)
-			items.GET("/:id", itemHandler.GetItem)
-			items.POST("", itemHandler.CreateItem)
-			items.PUT("/:id", itemHandler.UpdateItem)
-			items.DELETE("/:id", itemHandler.DeleteItem)
+			paymentHandler := handler.NewPaymentHandler(log)
+			payments.GET("", paymentHandler.GetPayments)
+			payments.GET("/:id", paymentHandler.GetPayment)
+			payments.POST("", paymentHandler.CreatePayment)
+			payments.PUT("/:id", paymentHandler.UpdatePayment)
+		}
+
+		// Клиенты
+		customers := v1.Group("/customers")
+		{
+			customerHandler := handler.NewCustomerHandler(log)
+			customers.GET("", customerHandler.GetCustomers)
+			customers.GET("/:id", customerHandler.GetCustomer)
+			customers.POST("", customerHandler.CreateCustomer)
+			customers.PUT("/:id", customerHandler.UpdateCustomer)
+		}
+
+		// Подписки
+		subscriptions := v1.Group("/subscriptions")
+		{
+			subscriptionHandler := handler.NewSubscriptionHandler(log)
+			subscriptions.GET("", subscriptionHandler.GetSubscriptions)
+			subscriptions.GET("/:id", subscriptionHandler.GetSubscription)
+			subscriptions.POST("", subscriptionHandler.CreateSubscription)
+			subscriptions.PUT("/:id", subscriptionHandler.UpdateSubscription)
+			subscriptions.DELETE("/:id", subscriptionHandler.CancelSubscription)
 		}
 	}
-
-	// Prometheus метрики
-	//r.GET("/metrics", custommiddleware.MetricsHandler())
 
 	// Создание HTTP сервера
 	port := getEnv("PORT", "8080")
@@ -93,6 +115,13 @@ func main() {
 	}
 
 	log.Info("Server stopped gracefully")
+}
+
+// HealthCheck обработчик для проверки работоспособности сервиса
+func healthCheck(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"status": "OK",
+	})
 }
 
 func getEnv(key, fallback string) string {
