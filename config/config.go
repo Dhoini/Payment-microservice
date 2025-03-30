@@ -11,6 +11,7 @@ type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	Logging  LoggingConfig
+	GRPC     GRPCConfig
 }
 
 // ServerConfig конфигурация HTTP сервера
@@ -34,6 +35,15 @@ type DatabaseConfig struct {
 // LoggingConfig конфигурация логгера
 type LoggingConfig struct {
 	Level string
+}
+
+// GRPCConfig конфигурация gRPC сервера
+type GRPCConfig struct {
+	Host     string
+	Port     string
+	UseTLS   bool
+	CertFile string
+	KeyFile  string
 }
 
 // GetDSN возвращает строку подключения к базе данных
@@ -64,6 +74,13 @@ func Load() (*Config, error) {
 		Logging: LoggingConfig{
 			Level: getEnv("LOG_LEVEL", "info"),
 		},
+		GRPC: GRPCConfig{
+			Host:     getEnv("GRPC_HOST", "0.0.0.0"),
+			Port:     getEnv("GRPC_PORT", "50051"),
+			UseTLS:   getEnvAsBool("GRPC_USE_TLS", false),
+			CertFile: getEnv("GRPC_CERT_FILE", ""),
+			KeyFile:  getEnv("GRPC_KEY_FILE", ""),
+		},
 	}
 
 	return cfg, nil
@@ -82,6 +99,16 @@ func getEnvAsInt(key string, defaultValue int) int {
 	if value, exists := os.LookupEnv(key); exists {
 		if intValue, err := strconv.Atoi(value); err == nil {
 			return intValue
+		}
+	}
+	return defaultValue
+}
+
+// getEnvAsBool получает значение переменной окружения как bool или возвращает значение по умолчанию
+func getEnvAsBool(key string, defaultValue bool) bool {
+	if value, exists := os.LookupEnv(key); exists {
+		if boolValue, err := strconv.ParseBool(value); err == nil {
+			return boolValue
 		}
 	}
 	return defaultValue

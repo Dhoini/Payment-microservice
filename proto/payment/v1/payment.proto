@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package customer.v1;
+
+option go_package = "github.com/Dhoini/Payment-microservice/proto/customer/v1;customerpb";
+
+import "google/protobuf/timestamp.proto";
+
+// CustomerService предоставляет API для управления клиентами
+service CustomerService {
+  // CreateCustomer создает нового клиента
+  rpc CreateCustomer(CreateCustomerRequest) returns (CustomerResponse) {}
+
+// GetCustomer возвращает информацию о клиенте по

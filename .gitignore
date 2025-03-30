@@ -1,0 +1,58 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go specific
+/vendor/
+/go.work
+
+# Output directories
+/bin/
+/build/
+/dist/
+
+# Environment and configuration files
+.env
+.env.*
+!.env.example
+*.local
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+
+# Coverage and test outputs
+coverage.txt
+coverage.html
+profile.out
+*.cover
+
+# Database dumps
+*.sql
+*.dump
+
+# Kubernetes secret files
+*secret*.yaml
+*secrets*.yaml
+
+# Dependency directories
+vendor/
+
+# Built binaries
+payment-service
