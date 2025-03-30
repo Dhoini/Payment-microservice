@@ -2,8 +2,13 @@ package main
 
 import (
 	"context"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
 	"github.com/Dhoini/Payment-microservice/config"
-	"github.com/Dhoini/Payment-microservice/internal/api/rest/middleware"
+	"github.com/Dhoini/Payment-microservice/internal/api/rest"
 	"github.com/Dhoini/Payment-microservice/internal/kafka"
 	"github.com/Dhoini/Payment-microservice/internal/kafka/producer"
 	"github.com/Dhoini/Payment-microservice/internal/metrics"
@@ -13,12 +18,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
 )
 
 var log *logger.Logger
@@ -81,60 +80,15 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	// Инициализация Gin роутера - отключаем встроенный логгер
-	r := gin.New()
+	// Настройка маршрутизатора
+	router := rest.SetupRouter(log, promRegistry)
 
-	// Подключение middleware
-	r.Use(middleware.LoggerMiddleware(log))
-	r.Use(gin.Recovery())
-
-	// Регистрация маршрутов
-	r.GET("/health", healthCheck)
-
-	// Prometheus метрики
-	r.GET("/metrics", gin.WrapH(promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})))
-
-	// API для платежей
-	v1 := r.Group("/api/v1")
-	{
-		// Платежи
-		payments := v1.Group("/payments")
-		{
-			paymentHandler := handler.NewPaymentHandler(log)
-			payments.GET("", paymentHandler.GetPayments)
-			payments.GET("/:id", paymentHandler.GetPayment)
-			payments.POST("", paymentHandler.CreatePayment)
-			payments.PUT("/:id", paymentHandler.UpdatePayment)
-		}
-
-		// Клиенты
-		customers := v1.Group("/customers")
-		{
-			customerHandler := handler.NewCustomerHandler(log)
-			customers.GET("", customerHandler.GetCustomers)
-			customers.GET("/:id", customerHandler.GetCustomer)
-			customers.POST("", customerHandler.CreateCustomer)
-			customers.PUT("/:id", customerHandler.UpdateCustomer)
-			customers.DELETE("/:id", customerHandler.DeleteCustomer)
-		}
-
-		// В будущем можно добавить другие API
-	}
-
-	// Создание HTTP сервера
-	port := cfg.Server.Port
-	server := &http.Server{
-		Addr:         ":" + port,
-		Handler:      r,
-		ReadTimeout:  time.Duration(cfg.Server.ReadTimeout) * time.Second,
-		WriteTimeout: time.Duration(cfg.Server.WriteTimeout) * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
+	// Создание и запуск HTTP сервера
+	server := rest.NewServer(router, cfg, log)
 
 	// Запуск сервера в горутине
-	log.Info("Starting server on port %s", port)
 	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.Start(); err != nil {
 			log.Fatal("Server error: %v", err)
 		}
 	}()
@@ -144,8 +98,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Info("Server is shutting down...")
-
+	// Останавливаем сервер
 	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeout) * time.Second
 	ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancelShutdown()
@@ -155,12 +108,4 @@ func main() {
 	}
 
 	log.Info("Server stopped gracefully")
-}
-
-// HealthCheck обработчик для проверки работоспособности сервиса
-func healthCheck(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"status": "OK",
-		"time":   time.Now().Format(time.RFC3339),
-	})
 }
