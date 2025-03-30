@@ -1,24 +1,34 @@
-// cmd/server/main.go
 package main
 
 import (
 	"context"
+	"github.com/Dhoini/Payment-microservice/config"
+	"github.com/Dhoini/Payment-microservice/internal/api/rest/middleware"
+	"github.com/Dhoini/Payment-microservice/internal/kafka"
+	"github.com/Dhoini/Payment-microservice/internal/kafka/producer"
+	"github.com/Dhoini/Payment-microservice/internal/metrics"
+	"github.com/Dhoini/Payment-microservice/internal/repository/postgres"
+	"github.com/Dhoini/Payment-microservice/pkg/logger"
+	"github.com/IBM/sarama"
+	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
-
-	"github.com/Dhoini/Payment-microservice/internal/handler"
-	"github.com/Dhoini/Payment-microservice/internal/middleware"
-	"github.com/Dhoini/Payment-microservice/pkg/logger"
-	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
 )
 
 var log *logger.Logger
 
 func init() {
+	// Загружаем переменные окружения
+	if err := godotenv.Load(); err != nil {
+		// Пропускаем ошибку, если .env файл не найден
+	}
+
 	// Инициализация логгера
 	logLevel := logger.INFO
 	if os.Getenv("DEBUG") == "true" {
@@ -28,10 +38,43 @@ func init() {
 }
 
 func main() {
-	// Загрузка переменных окружения
-	if err := godotenv.Load("./configs/.env"); err != nil {
-		log.Warn("No .env file found, using system environment variables")
+	// Загрузка конфигурации
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal("Failed to load configuration: %v", err)
 	}
+
+	// Создаем контекст с возможностью отмены
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Инициализация Prometheus
+	promRegistry := prometheus.NewRegistry()
+	paymentMetrics := metrics.NewPaymentMetrics(promRegistry, log)
+	systemMetrics := metrics.NewSystemMetrics(promRegistry, log)
+
+	// Запускаем сбор системных метрик
+	systemMetrics.StartRecording(15 * time.Second)
+	defer systemMetrics.Stop()
+
+	// Подключение к базе данных
+	dbPool, err := postgres.NewConnection(ctx, cfg.Database.GetDSN(), log)
+	if err != nil {
+		log.Fatal("Failed to connect to database: %v", err)
+	}
+	defer dbPool.Close()
+
+	// Инициализация Kafka продюсера
+	kafkaConfig := kafka.NewConfig([]string{"kafka:9092"})
+	saramaConfig := kafka.NewSaramaConfig(kafkaConfig, log)
+
+	kafkaProducer, err := sarama.NewSyncProducer(kafkaConfig.Brokers, saramaConfig)
+	if err != nil {
+		log.Fatal("Failed to create Kafka producer: %v", err)
+	}
+	defer kafkaProducer.Close()
+
+	paymentProducer := producer.NewKafkaPaymentProducer(kafkaProducer, log)
 
 	// Установка режима Gin
 	if os.Getenv("GIN_MODE") == "release" {
@@ -47,6 +90,9 @@ func main() {
 
 	// Регистрация маршрутов
 	r.GET("/health", healthCheck)
+
+	// Prometheus метрики
+	r.GET("/metrics", gin.WrapH(promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})))
 
 	// API для платежей
 	v1 := r.Group("/api/v1")
@@ -69,27 +115,19 @@ func main() {
 			customers.GET("/:id", customerHandler.GetCustomer)
 			customers.POST("", customerHandler.CreateCustomer)
 			customers.PUT("/:id", customerHandler.UpdateCustomer)
+			customers.DELETE("/:id", customerHandler.DeleteCustomer)
 		}
 
-		// Подписки
-		subscriptions := v1.Group("/subscriptions")
-		{
-			subscriptionHandler := handler.NewSubscriptionHandler(log)
-			subscriptions.GET("", subscriptionHandler.GetSubscriptions)
-			subscriptions.GET("/:id", subscriptionHandler.GetSubscription)
-			subscriptions.POST("", subscriptionHandler.CreateSubscription)
-			subscriptions.PUT("/:id", subscriptionHandler.UpdateSubscription)
-			subscriptions.DELETE("/:id", subscriptionHandler.CancelSubscription)
-		}
+		// В будущем можно добавить другие API
 	}
 
 	// Создание HTTP сервера
-	port := getEnv("PORT", "8080")
+	port := cfg.Server.Port
 	server := &http.Server{
 		Addr:         ":" + port,
 		Handler:      r,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  time.Duration(cfg.Server.ReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(cfg.Server.WriteTimeout) * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
@@ -107,10 +145,12 @@ func main() {
 	<-quit
 
 	log.Info("Server is shutting down...")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 
-	if err := server.Shutdown(ctx); err != nil {
+	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeout) * time.Second
+	ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancelShutdown()
+
+	if err := server.Shutdown(ctxShutdown); err != nil {
 		log.Fatal("Server forced to shutdown: %v", err)
 	}
 
@@ -121,12 +161,6 @@ func main() {
 func healthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status": "OK",
+		"time":   time.Now().Format(time.RFC3339),
 	})
-}
-
-func getEnv(key, fallback string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
-	}
-	return fallback
 }
