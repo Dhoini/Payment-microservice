@@ -12,7 +12,6 @@ import (
 	"github.com/Dhoini/Payment-microservice/pkg/res"    // Ваш пакет для ответов (используем для ошибок)
 
 	"github.com/gin-gonic/gin"
-	"github.com/stripe/stripe-go/v78"         // Основной пакет Stripe
 	"github.com/stripe/stripe-go/v78/webhook" // Пакет для обработки вебхуков
 )
 

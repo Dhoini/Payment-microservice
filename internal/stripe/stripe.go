@@ -3,11 +3,10 @@ package stripe
 import (
 	"context"
 	"errors"
-	"fmt" // Для форматирования ошибок
+	"fmt"
 
-	"github.com/Dhoini/Payment-microservice/pkg/logger" // Ваш логгер
+	"github.com/Dhoini/Payment-microservice/pkg/logger"
 
-	// Используем имя пакета по умолчанию
 	"github.com/stripe/stripe-go/v78"
 	"github.com/stripe/stripe-go/v78/client"
 )
@@ -31,8 +30,6 @@ type Client interface {
 
 	// CancelSubscription отменяет подписку в Stripe.
 	CancelSubscription(ctx context.Context, stripeSubscriptionID string) error
-
-	// TODO: Добавить другие необходимые методы Stripe (получение деталей подписки, планов и т.д.)
 }
 
 // stripeClient реализует интерфейс Client.
@@ -42,7 +39,6 @@ type stripeClient struct {
 }
 
 // NewStripeClient создает новый экземпляр клиента Stripe.
-// Используем *logger.Logger
 func NewStripeClient(apiKey string, log *logger.Logger) Client {
 	sc := &client.API{}
 	sc.Init(apiKey, nil) // Инициализируем клиент Stripe с API ключом
@@ -73,13 +69,12 @@ func (sc *stripeClient) CreateCustomer(ctx context.Context, userID, email string
 }
 
 // GetOrCreateCustomer ищет клиента по userID в метаданных, если не находит - создает нового.
-// Использует Search API.
 func (sc *stripeClient) GetOrCreateCustomer(ctx context.Context, userID, email string) (string, error) {
 	sc.log.Debugw("Searching for Stripe customer using Search API", "userID", userID)
 
 	// 1. Ищем клиента по метаданным (user_id) через Search API
 	searchQuery := fmt.Sprintf("metadata['%s']:'%s'", metadataUserIDKey, userID)
-	searchParams := &stripe.CustomerSearchParams{ // Параметры для поиска
+	searchParams := &stripe.CustomerSearchParams{
 		SearchParams: stripe.SearchParams{
 			Query:   searchQuery,
 			Limit:   stripe.Int64(1),
@@ -88,18 +83,17 @@ func (sc *stripeClient) GetOrCreateCustomer(ctx context.Context, userID, email s
 	}
 
 	// Выполняем поиск через sc.client.Search.Customers
-	iter := sc.client.Search.Customers(searchParams)
+	customers := sc.client.Customers.Search(searchParams)
 
-	if iter.Next() {
+	if customers.Next() {
 		// Клиент найден
-		cus := iter.Customer()
-		sc.log.Infow("Found existing Stripe customer via Search", "stripeCustomerID", cus.ID, "userID", userID)
-		// TODO: Проверить/обновить email?
-		return cus.ID, nil
+		customer := customers.Customer()
+		sc.log.Infow("Found existing Stripe customer via Search", "stripeCustomerID", customer.ID, "userID", userID)
+		return customer.ID, nil
 	}
 
 	// Проверяем ошибки итератора
-	if err := iter.Err(); err != nil {
+	if err := customers.Err(); err != nil {
 		logStripeError(sc.log, "SearchCustomers", err)
 		var stripeErr *stripe.Error
 		if errors.As(err, &stripeErr) {
@@ -126,7 +120,7 @@ func (sc *stripeClient) CreateSubscription(ctx context.Context, stripeCustomerID
 				Price: stripe.String(planID),
 			},
 		},
-		PaymentBehavior: stripe.String(string(stripe.SubscriptionPaymentBehaviorDefaultIncomplete)), // Константа из основного пакета
+		PaymentBehavior: stripe.String("default_incomplete"), //SubscriptionPaymentBehaviorDefaultIncomplete
 		Params: stripe.Params{
 			IdempotencyKey: stripe.String(idempotencyKey),
 			Context:        ctx,
@@ -136,24 +130,24 @@ func (sc *stripeClient) CreateSubscription(ctx context.Context, stripeCustomerID
 	params.AddExpand("latest_invoice.payment_intent")
 
 	// Создаем подписку через sc.client.Subscriptions.New
-	s, err := sc.client.Subscriptions.New(params)
+	subscription, err := sc.client.Subscriptions.New(params)
 	if err != nil {
 		logStripeError(sc.log, "CreateSubscription", err)
 		return "", "", fmt.Errorf("stripe: failed to create subscription: %w", err)
 	}
 
-	sc.log.Infow("Stripe subscription created", "stripeSubscriptionID", s.ID, "status", string(s.Status))
+	sc.log.Infow("Stripe subscription created", "stripeSubscriptionID", subscription.ID, "status", string(subscription.Status))
 
 	// Извлекаем client_secret
 	clientSecret := ""
-	if s.LatestInvoice != nil && s.LatestInvoice.PaymentIntent != nil {
-		clientSecret = s.LatestInvoice.PaymentIntent.ClientSecret
-		sc.log.Debugw("Retrieved client secret from payment intent", "stripeSubscriptionID", s.ID, "paymentIntentID", s.LatestInvoice.PaymentIntent.ID)
+	if subscription.LatestInvoice != nil && subscription.LatestInvoice.PaymentIntent != nil {
+		clientSecret = subscription.LatestInvoice.PaymentIntent.ClientSecret
+		sc.log.Debugw("Retrieved client secret from payment intent", "stripeSubscriptionID", subscription.ID, "paymentIntentID", subscription.LatestInvoice.PaymentIntent.ID)
 	} else {
-		sc.log.Warnw("No payment intent or client secret found in created subscription", "stripeSubscriptionID", s.ID, "status", string(s.Status))
+		sc.log.Warnw("No payment intent or client secret found in created subscription", "stripeSubscriptionID", subscription.ID, "status", string(subscription.Status))
 	}
 
-	return s.ID, clientSecret, nil
+	return subscription.ID, clientSecret, nil
 }
 
 // CancelSubscription отменяет подписку в Stripe немедленно.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	stripe2 "github.com/stripe/stripe-go/v78"
 	"time"
 
 	"github.com/Dhoini/Payment-microservice/internal/config"
@@ -242,7 +243,7 @@ func (s *PaymentService) GetSubscriptionsByUserID(ctx context.Context, userID st
 }
 
 // HandleWebhookEvent обрабатывает событие от Stripe (вызывается из webhook_handler).
-func (s *PaymentService) HandleWebhookEvent(ctx context.Context, eventType string, stripeSubscriptionID string, data map[string]interface{}) error {
+func (s *PaymentService) HandleWebhookEvent(ctx context.Context, eventType stripe2.EventType, stripeSubscriptionID string, data map[string]interface{}) error {
 	// Вместо With, будем добавлять в каждый вызов:
 	s.log.Infow("Handling webhook event", "eventType", eventType, "stripeSubscriptionID", stripeSubscriptionID)
 
@@ -391,7 +392,7 @@ func (s *PaymentService) HandleWebhookEvent(ctx context.Context, eventType strin
 
 // isSubscriptionEvent - простая проверка, относится ли тип события к подписке
 // (можно сделать более точной)
-func (s *PaymentService) isSubscriptionEvent(eventType string) bool {
+func (s *PaymentService) isSubscriptionEvent(eventType stripe2.EventType) bool {
 	return eventType == "customer.subscription.created" ||
 		eventType == "customer.subscription.updated" ||
 		eventType == "customer.subscription.deleted" ||

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/Dhoini/Payment-microservice/pkg/logger"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
 	"go.uber.org/zap"
@@ -12,31 +13,31 @@ import (
 
 // DBClient представляет клиент для работы с базой данных.
 type DBClient struct {
-	db  *sqlx.DB
-	log *zap.Logger
+	DB  *sqlx.DB
+	log *logger.Logger
 }
 
 // NewDBClient создает новый экземпляр DBClient.
-func NewDBClient(dsn string, log *zap.Logger) (*DBClient, error) {
+func NewDBClient(dsn string, log *logger.Logger) (*DBClient, error) {
 	db, err := sqlx.Connect("pgx", dsn)
 	if err != nil {
-		log.Error("Failed to connect to database", zap.Error(err))
+		log.Errorw("Failed to connect to database", zap.Error(err))
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
 	if err := db.Ping(); err != nil {
-		log.Error("Failed to ping database", zap.Error(err))
+		log.Errorw("Failed to ping database", zap.Error(err))
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	return &DBClient{db: db, log: log}, nil
+	return &DBClient{DB: db, log: log}, nil
 }
 
 // Close закрывает соединение с базой данных.
 func (dc *DBClient) Close() error {
-	err := dc.db.Close()
+	err := dc.DB.Close()
 	if err != nil {
-		dc.log.Error("Failed to close database connection", zap.Error(err))
+		dc.log.Errorw("Failed to close database connection", zap.Error(err))
 		return fmt.Errorf("failed to close database connection: %w", err)
 	}
 	return nil
@@ -49,16 +50,16 @@ func (dc *DBClient) GetSubscription(ctx context.Context, userID, subscriptionID 
         FROM subscriptions
         WHERE user_id = $1 AND subscription_id = $2
     `
-	err := dc.db.QueryRowxContext(ctx, ctx, query, userID, subscriptionID).StructScan(subscription)
+	err := dc.DB.QueryRowxContext(ctx, query, userID, subscriptionID).StructScan(subscription)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			dc.log.Warn("Subscription not found", zap.String("user_id", userID), zap.String("subscription_id", subscriptionID))
+			dc.log.Warnw("Subscription not found", zap.String("user_id", userID), zap.String("subscription_id", subscriptionID))
 			return fmt.Errorf("subscription not found")
 		}
-		dc.log.Error("Failed to get subscription from database", zap.Error(err))
+		dc.log.Errorw("Failed to get subscription from database", zap.Error(err))
 		return fmt.Errorf("failed to get subscription from database: %w", err)
 	}
-	dc.log.Debug("Subscription retrieved successfully", zap.String("user_id", userID), zap.String("subscription_id", subscriptionID))
+	dc.log.Debugw("Subscription retrieved successfully", zap.String("user_id", userID), zap.String("subscription_id", subscriptionID))
 	return nil
 }
 
@@ -73,14 +74,14 @@ func (dc *DBClient) SaveSubscription(ctx context.Context, subscription *Subscrip
             created_at = $4,
             canceled_at = $5
     `
-	_, err := dc.db.ExecContext(ctx, ctx, query,
+	_, err := dc.DB.ExecContext(ctx, query,
 		subscription.SubscriptionID, subscription.UserID, subscription.PlanID,
 		subscription.CreatedAt, subscription.CanceledAt)
 	if err != nil {
-		dc.log.Error("Failed to save subscription to database", zap.Error(err))
+		dc.log.Errorw("Failed to save subscription to database", zap.Error(err))
 		return fmt.Errorf("failed to save subscription to database: %w", err)
 	}
-	dc.log.Debug("Subscription saved successfully", zap.String("subscription_id", subscription.SubscriptionID))
+	dc.log.Debugw("Subscription saved successfully", zap.String("subscription_id", subscription.SubscriptionID))
 	return nil
 }
 
@@ -91,54 +92,54 @@ func (dc *DBClient) UpdateSubscription(ctx context.Context, subscriptionID strin
         SET canceled_at = $1
         WHERE subscription_id = $2
     `
-	res, err := dc.db.ExecContext(ctx, ctx, query, canceledAt, subscriptionID)
+	res, err := dc.DB.ExecContext(ctx, query, canceledAt, subscriptionID)
 	if err != nil {
-		dc.log.Error("Failed to update subscription in database", zap.Error(err))
+		dc.log.Errorw("Failed to update subscription in database", zap.Error(err))
 		return fmt.Errorf("failed to update subscription in database: %w", err)
 	}
 
 	rowsAffected, err := res.RowsAffected()
 	if err != nil {
-		dc.log.Error("Failed to get affected rows count", zap.Error(err))
+		dc.log.Errorw("Failed to get affected rows count", zap.Error(err))
 		return fmt.Errorf("failed to get affected rows count: %w", err)
 	}
 
 	if rowsAffected == 0 {
-		dc.log.Warn("No rows updated", zap.String("subscription_id", subscriptionID))
+		dc.log.Warnw("No rows updated", zap.String("subscription_id", subscriptionID))
 		return fmt.Errorf("no such subscription: %s", subscriptionID)
 	}
-	dc.log.Debug("Subscription updated successfully", zap.String("subscription_id", subscriptionID))
+	dc.log.Debugw("Subscription updated successfully", zap.String("subscription_id", subscriptionID))
 
 	return nil
 }
 
 func (dc *DBClient) BeginTx(ctx context.Context) (*sqlx.Tx, error) {
-	tx, err := dc.db.Beginx()
+	tx, err := dc.DB.Beginx()
 	if err != nil {
-		dc.log.Error("Failed to begin transaction", zap.Error(err))
+		dc.log.Errorw("Failed to begin transaction", zap.Error(err))
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	dc.log.Debug("Transaction started")
+	dc.log.Debugw("Transaction started")
 	return tx, nil
 }
 
 func (dc *DBClient) CommitTx(ctx context.Context, tx *sqlx.Tx) error {
 	err := tx.Commit()
 	if err != nil {
-		dc.log.Error("Failed to commit transaction", zap.Error(err))
+		dc.log.Errorw("Failed to commit transaction", zap.Error(err))
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-	dc.log.Debug("Transaction committed")
+	dc.log.Debugw("Transaction committed")
 	return nil
 }
 
 func (dc *DBClient) RollbackTx(ctx context.Context, tx *sqlx.Tx) error {
 	err := tx.Rollback()
 	if err != nil {
-		dc.log.Error("Failed to rollback transaction", zap.Error(err))
+		dc.log.Errorw("Failed to rollback transaction", zap.Error(err))
 		return fmt.Errorf("failed to rollback transaction: %w", err)
 	}
-	dc.log.Debug("Transaction rolled back")
+	dc.log.Debugw("Transaction rolled back")
 	return nil
 }
 
