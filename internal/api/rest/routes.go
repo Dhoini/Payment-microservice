@@ -65,7 +65,7 @@ func SetupRouter(log *logger.Logger, registry *prometheus.Registry, cfg *config.
 		// Подписки
 		subscriptions := v1.Group("/subscriptions")
 		{
-			subscriptions.GET("", subscriptionHandler.GetSubscriptions)
+			subscriptions.GET("", subscriptionHandler.ListSubscriptions)
 			subscriptions.GET("/:id", subscriptionHandler.GetSubscription)
 			subscriptions.POST("", subscriptionHandler.CreateSubscription)
 			subscriptions.POST("/:id/cancel", subscriptionHandler.CancelSubscription)
@@ -88,6 +88,7 @@ func SetupRouter(log *logger.Logger, registry *prometheus.Registry, cfg *config.
 	webhooks := r.Group("/webhooks")
 	{
 		webhooks.POST("/stripe", webhookHandler.HandleStripeWebhook)
+
 		// Здесь в будущем можно добавить другие маршруты (подписки и т.д.)
 	}
 	return r

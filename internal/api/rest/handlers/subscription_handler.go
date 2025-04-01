@@ -14,96 +14,30 @@ import (
 type SubscriptionHandler struct {
 	subscriptionSvc service.SubscriptionService
 	customerSvc     service.CustomerService
-	paymentSvc      service.PaymentService
+	planSvc         service.SubscriptionService
 	log             *logger.Logger
 }
 
 // NewSubscriptionHandler создает новый обработчик подписок
-func NewSubscriptionHandler(log *logger.Logger, customerSvc service.CustomerService, paymentSvc service.PaymentService) *SubscriptionHandler {
-	// Создаем репозиторий для подписок
-	repo := repository.NewInMemorySubscriptionRepository(log)
+func NewSubscriptionHandler(log *logger.Logger) *SubscriptionHandler {
+	customerRepo := repository.NewInMemoryCustomerRepository(log)
+	paymentRepo := repository.NewInMemoryPaymentRepository(log)
+	subscriptionRepo := repository.NewInMemorySubscriptionRepository(log)
 
-	// Создаем сервис подписок
-	subscriptionSvc := service.NewSubscriptionService(repo, customerSvc, paymentSvc, log)
+	customerSvc := service.NewCustomerService(customerRepo, log)
+	svc := service.NewSubscriptionService(
+		subscriptionRepo,
+		customerRepo,
+		paymentRepo,
+		log,
+	)
 
 	return &SubscriptionHandler{
-		subscriptionSvc: subscriptionSvc,
+		subscriptionSvc: svc,
 		customerSvc:     customerSvc,
-		paymentSvc:      paymentSvc,
+		planSvc:         svc,
 		log:             log,
 	}
-}
-
-// GetSubscriptions возвращает список всех подписок
-func (h *SubscriptionHandler) GetSubscriptions(c *gin.Context) {
-	// Проверяем, если есть параметр запроса customer_id
-	customerID := c.Query("customer_id")
-	if customerID != "" {
-		h.getSubscriptionsByCustomerID(c, customerID)
-		return
-	}
-
-	subscriptions, err := h.subscriptionSvc.GetAll(c.Request.Context())
-	if err != nil {
-		h.log.Error("Failed to get subscriptions: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subscriptions"})
-		return
-	}
-
-	h.log.Info("Returned %d subscriptions", len(subscriptions))
-	c.JSON(http.StatusOK, subscriptions)
-}
-
-// getSubscriptionsByCustomerID возвращает подписки по ID клиента
-func (h *SubscriptionHandler) getSubscriptionsByCustomerID(c *gin.Context, customerID string) {
-	subscriptions, err := h.subscriptionSvc.GetByCustomerID(c.Request.Context(), customerID)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			h.log.Warn("Customer not found: %s", customerID)
-			c.JSON(http.StatusNotFound, gin.H{"error": "Customer not found"})
-			return
-		}
-
-		if err == repository.ErrInvalidData {
-			h.log.Warn("Invalid UUID format: %s", customerID)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid customer ID format"})
-			return
-		}
-
-		h.log.Error("Failed to get subscriptions for customer: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subscriptions for customer"})
-		return
-	}
-
-	h.log.Info("Returned %d subscriptions for customer %s", len(subscriptions), customerID)
-	c.JSON(http.StatusOK, subscriptions)
-}
-
-// GetSubscription возвращает подписку по ID
-func (h *SubscriptionHandler) GetSubscription(c *gin.Context) {
-	id := c.Param("id")
-
-	subscription, err := h.subscriptionSvc.GetByID(c.Request.Context(), id)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			h.log.Warn("Subscription not found: %s", id)
-			c.JSON(http.StatusNotFound, gin.H{"error": "Subscription not found"})
-			return
-		}
-
-		if err == repository.ErrInvalidData {
-			h.log.Warn("Invalid UUID format: %s", id)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid subscription ID format"})
-			return
-		}
-
-		h.log.Error("Failed to get subscription: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subscription"})
-		return
-	}
-
-	h.log.Info("Returned subscription with ID: %s", id)
-	c.JSON(http.StatusOK, subscription)
 }
 
 // CreateSubscription создает новую подписку
@@ -142,6 +76,78 @@ func (h *SubscriptionHandler) CreateSubscription(c *gin.Context) {
 
 	h.log.Info("Created subscription with ID: %s", subscription.ID)
 	c.JSON(http.StatusCreated, subscription)
+}
+
+// GetSubscription возвращает подписку по ID
+func (h *SubscriptionHandler) GetSubscription(c *gin.Context) {
+	id := c.Param("id")
+
+	subscription, err := h.subscriptionSvc.GetByID(c.Request.Context(), id)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			h.log.Warn("Subscription not found: %s", id)
+			c.JSON(http.StatusNotFound, gin.H{"error": "Subscription not found"})
+			return
+		}
+
+		if err == repository.ErrInvalidData {
+			h.log.Warn("Invalid UUID format: %s", id)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid subscription ID format"})
+			return
+		}
+
+		h.log.Error("Failed to get subscription: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subscription"})
+		return
+	}
+
+	h.log.Info("Returned subscription with ID: %s", id)
+	c.JSON(http.StatusOK, subscription)
+}
+
+// ListSubscriptions возвращает список подписок
+func (h *SubscriptionHandler) ListSubscriptions(c *gin.Context) {
+	// Проверяем, если есть параметр запроса customer_id
+	customerID := c.Query("customer_id")
+	if customerID != "" {
+		h.listSubscriptionsByCustomerID(c, customerID)
+		return
+	}
+
+	subscriptions, err := h.subscriptionSvc.GetAll(c.Request.Context())
+	if err != nil {
+		h.log.Error("Failed to get subscriptions: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subscriptions"})
+		return
+	}
+
+	h.log.Info("Returned %d subscriptions", len(subscriptions))
+	c.JSON(http.StatusOK, subscriptions)
+}
+
+// listSubscriptionsByCustomerID возвращает подписки по ID клиента
+func (h *SubscriptionHandler) listSubscriptionsByCustomerID(c *gin.Context, customerID string) {
+	subscriptions, err := h.subscriptionSvc.GetByCustomerID(c.Request.Context(), customerID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			h.log.Warn("Customer not found: %s", customerID)
+			c.JSON(http.StatusNotFound, gin.H{"error": "Customer not found"})
+			return
+		}
+
+		if err == repository.ErrInvalidData {
+			h.log.Warn("Invalid UUID format: %s", customerID)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid customer ID format"})
+			return
+		}
+
+		h.log.Error("Failed to get subscriptions for customer: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subscriptions for customer"})
+		return
+	}
+
+	h.log.Info("Returned %d subscriptions for customer %s", len(subscriptions), customerID)
+	c.JSON(http.StatusOK, subscriptions)
 }
 
 // CancelSubscription отменяет подписку
@@ -244,137 +250,4 @@ func (h *SubscriptionHandler) ResumeSubscription(c *gin.Context) {
 
 	h.log.Info("Resumed subscription with ID: %s", id)
 	c.JSON(http.StatusOK, subscription)
-}
-
-// GetPlans возвращает список всех планов подписок
-func (h *SubscriptionHandler) GetPlans(c *gin.Context) {
-	plans, err := h.subscriptionSvc.GetAllPlans(c.Request.Context())
-	if err != nil {
-		h.log.Error("Failed to get subscription plans: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subscription plans"})
-		return
-	}
-
-	h.log.Info("Returned %d subscription plans", len(plans))
-	c.JSON(http.StatusOK, plans)
-}
-
-// GetPlan возвращает план подписки по ID
-func (h *SubscriptionHandler) GetPlan(c *gin.Context) {
-	id := c.Param("id")
-
-	plan, err := h.subscriptionSvc.GetPlanByID(c.Request.Context(), id)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			h.log.Warn("Subscription plan not found: %s", id)
-			c.JSON(http.StatusNotFound, gin.H{"error": "Subscription plan not found"})
-			return
-		}
-
-		if err == repository.ErrInvalidData {
-			h.log.Warn("Invalid UUID format: %s", id)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid subscription plan ID format"})
-			return
-		}
-
-		h.log.Error("Failed to get subscription plan: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subscription plan"})
-		return
-	}
-
-	h.log.Info("Returned subscription plan with ID: %s", id)
-	c.JSON(http.StatusOK, plan)
-}
-
-// CreatePlan создает новый план подписки
-func (h *SubscriptionHandler) CreatePlan(c *gin.Context) {
-	var req domain.SubscriptionPlanRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		h.log.Warn("Invalid request: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	plan, err := h.subscriptionSvc.CreatePlan(c.Request.Context(), req)
-	if err != nil {
-		if err == repository.ErrInvalidData {
-			h.log.Warn("Invalid data in request")
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid data in request"})
-			return
-		}
-
-		h.log.Error("Failed to create subscription plan: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create subscription plan"})
-		return
-	}
-
-	h.log.Info("Created subscription plan with ID: %s", plan.ID)
-	c.JSON(http.StatusCreated, plan)
-}
-
-// UpdatePlan обновляет план подписки
-func (h *SubscriptionHandler) UpdatePlan(c *gin.Context) {
-	id := c.Param("id")
-
-	var req domain.SubscriptionPlanRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		h.log.Warn("Invalid request: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	plan, err := h.subscriptionSvc.UpdatePlan(c.Request.Context(), id, req)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			h.log.Warn("Subscription plan not found: %s", id)
-			c.JSON(http.StatusNotFound, gin.H{"error": "Subscription plan not found"})
-			return
-		}
-
-		if err == repository.ErrInvalidData {
-			h.log.Warn("Invalid UUID format: %s", id)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid subscription plan ID format"})
-			return
-		}
-
-		h.log.Error("Failed to update subscription plan: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update subscription plan"})
-		return
-	}
-
-	h.log.Info("Updated subscription plan with ID: %s", id)
-	c.JSON(http.StatusOK, plan)
-}
-
-// DeletePlan удаляет план подписки
-func (h *SubscriptionHandler) DeletePlan(c *gin.Context) {
-	id := c.Param("id")
-
-	err := h.subscriptionSvc.DeletePlan(c.Request.Context(), id)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			h.log.Warn("Subscription plan not found: %s", id)
-			c.JSON(http.StatusNotFound, gin.H{"error": "Subscription plan not found"})
-			return
-		}
-
-		if err == repository.ErrInvalidData {
-			h.log.Warn("Invalid UUID format: %s", id)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid subscription plan ID format"})
-			return
-		}
-
-		if err == domain.ErrInvalidOperation {
-			h.log.Warn("Cannot delete subscription plan: %v", err)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot delete subscription plan that has active subscriptions"})
-			return
-		}
-
-		h.log.Error("Failed to delete subscription plan: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete subscription plan"})
-		return
-	}
-
-	h.log.Info("Deleted subscription plan with ID: %s", id)
-	c.JSON(http.StatusOK, gin.H{"message": "Subscription plan deleted successfully"})
 }
