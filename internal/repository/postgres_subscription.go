@@ -22,7 +22,7 @@ type postgresSubscriptionRepo struct {
 }
 
 // NewPostgresSubscriptionRepository создает новый экземпляр репозитория для PostgreSQL.
-func NewPostgresSubscriptionRepository(db *sqlx.DB, log *logger.Logger) SubscriptionRepository {
+func NewPostgresSubscriptionRepository(db func() *sqlx.DB, log *logger.Logger) SubscriptionRepository {
 	return &postgresSubscriptionRepo{
 		db:  db,
 		log: log,

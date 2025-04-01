@@ -13,8 +13,13 @@ import (
 
 // DBClient представляет клиент для работы с базой данных.
 type DBClient struct {
-	DB  *sqlx.DB
+	db  *sqlx.DB
 	log *logger.Logger
+}
+
+// DB возвращает объект подключения к базе данных.
+func (dc *DBClient) DB() *sqlx.DB {
+	return dc.db
 }
 
 // NewDBClient создает новый экземпляр DBClient.
@@ -30,12 +35,12 @@ func NewDBClient(dsn string, log *logger.Logger) (*DBClient, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	return &DBClient{DB: db, log: log}, nil
+	return &DBClient{db: db, log: log}, nil
 }
 
 // Close закрывает соединение с базой данных.
 func (dc *DBClient) Close() error {
-	err := dc.DB.Close()
+	err := dc.db.Close()
 	if err != nil {
 		dc.log.Errorw("Failed to close database connection", zap.Error(err))
 		return fmt.Errorf("failed to close database connection: %w", err)
@@ -50,7 +55,7 @@ func (dc *DBClient) GetSubscription(ctx context.Context, userID, subscriptionID 
         FROM subscriptions
         WHERE user_id = $1 AND subscription_id = $2
     `
-	err := dc.DB.QueryRowxContext(ctx, query, userID, subscriptionID).StructScan(subscription)
+	err := dc.db.QueryRowxContext(ctx, query, userID, subscriptionID).StructScan(subscription)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			dc.log.Warnw("Subscription not found", zap.String("user_id", userID), zap.String("subscription_id", subscriptionID))
@@ -74,7 +79,7 @@ func (dc *DBClient) SaveSubscription(ctx context.Context, subscription *Subscrip
             created_at = $4,
             canceled_at = $5
     `
-	_, err := dc.DB.ExecContext(ctx, query,
+	_, err := dc.db.ExecContext(ctx, query,
 		subscription.SubscriptionID, subscription.UserID, subscription.PlanID,
 		subscription.CreatedAt, subscription.CanceledAt)
 	if err != nil {
@@ -92,7 +97,7 @@ func (dc *DBClient) UpdateSubscription(ctx context.Context, subscriptionID strin
         SET canceled_at = $1
         WHERE subscription_id = $2
     `
-	res, err := dc.DB.ExecContext(ctx, query, canceledAt, subscriptionID)
+	res, err := dc.db.ExecContext(ctx, query, canceledAt, subscriptionID)
 	if err != nil {
 		dc.log.Errorw("Failed to update subscription in database", zap.Error(err))
 		return fmt.Errorf("failed to update subscription in database: %w", err)
@@ -114,7 +119,7 @@ func (dc *DBClient) UpdateSubscription(ctx context.Context, subscriptionID strin
 }
 
 func (dc *DBClient) BeginTx(ctx context.Context) (*sqlx.Tx, error) {
-	tx, err := dc.DB.Beginx()
+	tx, err := dc.db.Beginx()
 	if err != nil {
 		dc.log.Errorw("Failed to begin transaction", zap.Error(err))
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
