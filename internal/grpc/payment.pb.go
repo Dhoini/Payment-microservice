@@ -24,9 +24,10 @@ const (
 
 type CreateSubscriptionRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
-	UserId         string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	PlanId         string                 `protobuf:"bytes,2,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
-	IdempotencyKey string                 `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	UserId         string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                         // ID пользователя из вашей системы
+	PlanId         string                 `protobuf:"bytes,2,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`                         // ID тарифного плана (Price ID из Stripe)
+	IdempotencyKey string                 `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"` // Ключ идемпотентности (опционально, но рекомендуется)
+	UserEmail      string                 `protobuf:"bytes,4,opt,name=user_email,json=userEmail,proto3" json:"user_email,omitempty"`                // Email пользователя (нужен для создания Stripe Customer)
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -82,11 +83,19 @@ func (x *CreateSubscriptionRequest) GetIdempotencyKey() string {
 	return ""
 }
 
+func (x *CreateSubscriptionRequest) GetUserEmail() string {
+	if x != nil {
+		return x.UserEmail
+	}
+	return ""
+}
+
 type CreateSubscriptionResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
-	SubscriptionId string                 `protobuf:"bytes,1,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"`
-	ClientSecret   string                 `protobuf:"bytes,2,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
-	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	SubscriptionId string                 `protobuf:"bytes,1,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"` // ID созданной подписки (Stripe sub_...)
+	ClientSecret   string                 `protobuf:"bytes,2,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`       // Секрет для подтверждения платежа на клиенте (если нужен)
+	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`                // Время создания подписки (примерное)
+	Status         string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`                                       // Статус подписки из Stripe (например, "active", "incomplete")
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -142,11 +151,18 @@ func (x *CreateSubscriptionResponse) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *CreateSubscriptionResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
 type CancelSubscriptionRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
-	UserId         string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	SubscriptionId string                 `protobuf:"bytes,2,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"`
-	IdempotencyKey string                 `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	UserId         string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                         // ID пользователя (для проверки прав)
+	SubscriptionId string                 `protobuf:"bytes,2,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"` // ID подписки для отмены
+	IdempotencyKey string                 `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"` // Ключ идемпотентности (опционально)
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -204,8 +220,8 @@ func (x *CancelSubscriptionRequest) GetIdempotencyKey() string {
 
 type CancelSubscriptionResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	CanceledAt    *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=canceled_at,json=canceledAt,proto3" json:"canceled_at,omitempty"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`                        // Признак успеха операции
+	CanceledAt    *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=canceled_at,json=canceledAt,proto3" json:"canceled_at,omitempty"` // Время отмены (или когда отмена вступит в силу)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -256,8 +272,8 @@ func (x *CancelSubscriptionResponse) GetCanceledAt() *timestamppb.Timestamp {
 
 type GetSubscriptionRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
-	UserId         string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	SubscriptionId string                 `protobuf:"bytes,2,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"`
+	UserId         string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                         // ID пользователя (для проверки прав)
+	SubscriptionId string                 `protobuf:"bytes,2,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"` // ID запрашиваемой подписки
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -306,19 +322,125 @@ func (x *GetSubscriptionRequest) GetSubscriptionId() string {
 	return ""
 }
 
+// Представление подписки (можно расширить)
+type Subscription struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	SubscriptionId   string                 `protobuf:"bytes,1,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"`
+	UserId           string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	PlanId           string                 `protobuf:"bytes,3,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
+	Status           string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	StripeCustomerId string                 `protobuf:"bytes,5,opt,name=stripe_customer_id,json=stripeCustomerId,proto3" json:"stripe_customer_id,omitempty"`
+	CreatedAt        *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt        *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	ExpiresAt        *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	CanceledAt       *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=canceled_at,json=canceledAt,proto3" json:"canceled_at,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *Subscription) Reset() {
+	*x = Subscription{}
+	mi := &file_payment_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Subscription) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Subscription) ProtoMessage() {}
+
+func (x *Subscription) ProtoReflect() protoreflect.Message {
+	mi := &file_payment_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Subscription.ProtoReflect.Descriptor instead.
+func (*Subscription) Descriptor() ([]byte, []int) {
+	return file_payment_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *Subscription) GetSubscriptionId() string {
+	if x != nil {
+		return x.SubscriptionId
+	}
+	return ""
+}
+
+func (x *Subscription) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *Subscription) GetPlanId() string {
+	if x != nil {
+		return x.PlanId
+	}
+	return ""
+}
+
+func (x *Subscription) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *Subscription) GetStripeCustomerId() string {
+	if x != nil {
+		return x.StripeCustomerId
+	}
+	return ""
+}
+
+func (x *Subscription) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *Subscription) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *Subscription) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *Subscription) GetCanceledAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CanceledAt
+	}
+	return nil
+}
+
 type GetSubscriptionResponse struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	SubscriptionId string                 `protobuf:"bytes,1,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"`
-	PlanId         string                 `protobuf:"bytes,2,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
-	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	CanceledAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=canceled_at,json=canceledAt,proto3" json:"canceled_at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Subscription  *Subscription          `protobuf:"bytes,1,opt,name=subscription,proto3" json:"subscription,omitempty"` // Возвращаем полную информацию о подписке
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetSubscriptionResponse) Reset() {
 	*x = GetSubscriptionResponse{}
-	mi := &file_payment_proto_msgTypes[5]
+	mi := &file_payment_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -330,7 +452,7 @@ func (x *GetSubscriptionResponse) String() string {
 func (*GetSubscriptionResponse) ProtoMessage() {}
 
 func (x *GetSubscriptionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_payment_proto_msgTypes[5]
+	mi := &file_payment_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -343,33 +465,12 @@ func (x *GetSubscriptionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSubscriptionResponse.ProtoReflect.Descriptor instead.
 func (*GetSubscriptionResponse) Descriptor() ([]byte, []int) {
-	return file_payment_proto_rawDescGZIP(), []int{5}
+	return file_payment_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *GetSubscriptionResponse) GetSubscriptionId() string {
+func (x *GetSubscriptionResponse) GetSubscription() *Subscription {
 	if x != nil {
-		return x.SubscriptionId
-	}
-	return ""
-}
-
-func (x *GetSubscriptionResponse) GetPlanId() string {
-	if x != nil {
-		return x.PlanId
-	}
-	return ""
-}
-
-func (x *GetSubscriptionResponse) GetCreatedAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.CreatedAt
-	}
-	return nil
-}
-
-func (x *GetSubscriptionResponse) GetCanceledAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.CanceledAt
+		return x.Subscription
 	}
 	return nil
 }
@@ -378,16 +479,19 @@ var File_payment_proto protoreflect.FileDescriptor
 
 const file_payment_proto_rawDesc = "" +
 	"\n" +
-	"\rpayment.proto\x12\apayment\x1a\x1fgoogle/protobuf/timestamp.proto\"v\n" +
+	"\rpayment.proto\x12\apayment\x1a\x1fgoogle/protobuf/timestamp.proto\"\x95\x01\n" +
 	"\x19CreateSubscriptionRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x17\n" +
 	"\aplan_id\x18\x02 \x01(\tR\x06planId\x12'\n" +
-	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\"\xa5\x01\n" +
+	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\x12\x1d\n" +
+	"\n" +
+	"user_email\x18\x04 \x01(\tR\tuserEmail\"\xbd\x01\n" +
 	"\x1aCreateSubscriptionResponse\x12'\n" +
 	"\x0fsubscription_id\x18\x01 \x01(\tR\x0esubscriptionId\x12#\n" +
 	"\rclient_secret\x18\x02 \x01(\tR\fclientSecret\x129\n" +
 	"\n" +
-	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x86\x01\n" +
+	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\"\x86\x01\n" +
 	"\x19CancelSubscriptionRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12'\n" +
 	"\x0fsubscription_id\x18\x02 \x01(\tR\x0esubscriptionId\x12'\n" +
@@ -398,14 +502,23 @@ const file_payment_proto_rawDesc = "" +
 	"canceledAt\"Z\n" +
 	"\x16GetSubscriptionRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12'\n" +
-	"\x0fsubscription_id\x18\x02 \x01(\tR\x0esubscriptionId\"\xd3\x01\n" +
-	"\x17GetSubscriptionResponse\x12'\n" +
+	"\x0fsubscription_id\x18\x02 \x01(\tR\x0esubscriptionId\"\x9d\x03\n" +
+	"\fSubscription\x12'\n" +
 	"\x0fsubscription_id\x18\x01 \x01(\tR\x0esubscriptionId\x12\x17\n" +
-	"\aplan_id\x18\x02 \x01(\tR\x06planId\x129\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x17\n" +
+	"\aplan_id\x18\x03 \x01(\tR\x06planId\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\x12,\n" +
+	"\x12stripe_customer_id\x18\x05 \x01(\tR\x10stripeCustomerId\x129\n" +
 	"\n" +
-	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12;\n" +
-	"\vcanceled_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"canceledAt2\xaa\x02\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x129\n" +
+	"\n" +
+	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12;\n" +
+	"\vcanceled_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"canceledAt\"T\n" +
+	"\x17GetSubscriptionResponse\x129\n" +
+	"\fsubscription\x18\x01 \x01(\v2\x15.payment.SubscriptionR\fsubscription2\xaa\x02\n" +
 	"\x0ePaymentService\x12_\n" +
 	"\x12CreateSubscription\x12\".payment.CreateSubscriptionRequest\x1a#.payment.CreateSubscriptionResponse\"\x00\x12_\n" +
 	"\x12CancelSubscription\x12\".payment.CancelSubscriptionRequest\x1a#.payment.CancelSubscriptionResponse\"\x00\x12V\n" +
@@ -424,32 +537,36 @@ func file_payment_proto_rawDescGZIP() []byte {
 	return file_payment_proto_rawDescData
 }
 
-var file_payment_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_payment_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_payment_proto_goTypes = []any{
 	(*CreateSubscriptionRequest)(nil),  // 0: payment.CreateSubscriptionRequest
 	(*CreateSubscriptionResponse)(nil), // 1: payment.CreateSubscriptionResponse
 	(*CancelSubscriptionRequest)(nil),  // 2: payment.CancelSubscriptionRequest
 	(*CancelSubscriptionResponse)(nil), // 3: payment.CancelSubscriptionResponse
 	(*GetSubscriptionRequest)(nil),     // 4: payment.GetSubscriptionRequest
-	(*GetSubscriptionResponse)(nil),    // 5: payment.GetSubscriptionResponse
-	(*timestamppb.Timestamp)(nil),      // 6: google.protobuf.Timestamp
+	(*Subscription)(nil),               // 5: payment.Subscription
+	(*GetSubscriptionResponse)(nil),    // 6: payment.GetSubscriptionResponse
+	(*timestamppb.Timestamp)(nil),      // 7: google.protobuf.Timestamp
 }
 var file_payment_proto_depIdxs = []int32{
-	6, // 0: payment.CreateSubscriptionResponse.created_at:type_name -> google.protobuf.Timestamp
-	6, // 1: payment.CancelSubscriptionResponse.canceled_at:type_name -> google.protobuf.Timestamp
-	6, // 2: payment.GetSubscriptionResponse.created_at:type_name -> google.protobuf.Timestamp
-	6, // 3: payment.GetSubscriptionResponse.canceled_at:type_name -> google.protobuf.Timestamp
-	0, // 4: payment.PaymentService.CreateSubscription:input_type -> payment.CreateSubscriptionRequest
-	2, // 5: payment.PaymentService.CancelSubscription:input_type -> payment.CancelSubscriptionRequest
-	4, // 6: payment.PaymentService.GetSubscription:input_type -> payment.GetSubscriptionRequest
-	1, // 7: payment.PaymentService.CreateSubscription:output_type -> payment.CreateSubscriptionResponse
-	3, // 8: payment.PaymentService.CancelSubscription:output_type -> payment.CancelSubscriptionResponse
-	5, // 9: payment.PaymentService.GetSubscription:output_type -> payment.GetSubscriptionResponse
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	7,  // 0: payment.CreateSubscriptionResponse.created_at:type_name -> google.protobuf.Timestamp
+	7,  // 1: payment.CancelSubscriptionResponse.canceled_at:type_name -> google.protobuf.Timestamp
+	7,  // 2: payment.Subscription.created_at:type_name -> google.protobuf.Timestamp
+	7,  // 3: payment.Subscription.updated_at:type_name -> google.protobuf.Timestamp
+	7,  // 4: payment.Subscription.expires_at:type_name -> google.protobuf.Timestamp
+	7,  // 5: payment.Subscription.canceled_at:type_name -> google.protobuf.Timestamp
+	5,  // 6: payment.GetSubscriptionResponse.subscription:type_name -> payment.Subscription
+	0,  // 7: payment.PaymentService.CreateSubscription:input_type -> payment.CreateSubscriptionRequest
+	2,  // 8: payment.PaymentService.CancelSubscription:input_type -> payment.CancelSubscriptionRequest
+	4,  // 9: payment.PaymentService.GetSubscription:input_type -> payment.GetSubscriptionRequest
+	1,  // 10: payment.PaymentService.CreateSubscription:output_type -> payment.CreateSubscriptionResponse
+	3,  // 11: payment.PaymentService.CancelSubscription:output_type -> payment.CancelSubscriptionResponse
+	6,  // 12: payment.PaymentService.GetSubscription:output_type -> payment.GetSubscriptionResponse
+	10, // [10:13] is the sub-list for method output_type
+	7,  // [7:10] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_payment_proto_init() }
@@ -463,7 +580,7 @@ func file_payment_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_payment_proto_rawDesc), len(file_payment_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

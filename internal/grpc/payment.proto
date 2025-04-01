@@ -6,43 +6,67 @@ option go_package = "./;payment";
 
 import "google/protobuf/timestamp.proto";
 
-message CreateSubscriptionRequest {
-  string user_id = 1;
-  string plan_id = 2;
-  string idempotency_key = 3;
-}
-
-message CreateSubscriptionResponse {
-  string subscription_id = 1;
-  string client_secret = 2;
-  google.protobuf.Timestamp created_at = 3;
-}
-
-message CancelSubscriptionRequest {
-  string user_id = 1;
-  string subscription_id = 2;
-  string idempotency_key = 3;
-}
-
-message CancelSubscriptionResponse {
-  bool success = 1;
-  google.protobuf.Timestamp canceled_at = 2;
-}
-
-message GetSubscriptionRequest {
-  string user_id = 1;
-  string subscription_id = 2;
-}
-
-message GetSubscriptionResponse {
-  string subscription_id = 1;
-  string plan_id = 2;
-  google.protobuf.Timestamp created_at = 3;
-  google.protobuf.Timestamp canceled_at = 4;
-}
-
+// Сервис для управления платежами и подписками
 service PaymentService {
   rpc CreateSubscription(CreateSubscriptionRequest) returns (CreateSubscriptionResponse) {}
   rpc CancelSubscription(CancelSubscriptionRequest) returns (CancelSubscriptionResponse) {}
   rpc GetSubscription(GetSubscriptionRequest) returns (GetSubscriptionResponse) {}
+  // Можно добавить другие методы, например, GetUserSubscriptions
 }
+
+message CreateSubscriptionRequest {
+  string user_id = 1; // ID пользователя из вашей системы
+  string plan_id = 2; // ID тарифного плана (Price ID из Stripe)
+  string idempotency_key = 3; // Ключ идемпотентности (опционально, но рекомендуется)
+  string user_email = 4; // Email пользователя (нужен для создания Stripe Customer)
+}
+
+message CreateSubscriptionResponse {
+  string subscription_id = 1; // ID созданной подписки (Stripe sub_...)
+  string client_secret = 2; // Секрет для подтверждения платежа на клиенте (если нужен)
+  google.protobuf.Timestamp created_at = 3; // Время создания подписки (примерное)
+  string status = 4; // Статус подписки из Stripe (например, "active", "incomplete")
+}
+
+message CancelSubscriptionRequest {
+  string user_id = 1; // ID пользователя (для проверки прав)
+  string subscription_id = 2; // ID подписки для отмены
+  string idempotency_key = 3; // Ключ идемпотентности (опционально)
+}
+
+message CancelSubscriptionResponse {
+  bool success = 1; // Признак успеха операции
+  google.protobuf.Timestamp canceled_at = 2; // Время отмены (или когда отмена вступит в силу)
+}
+
+message GetSubscriptionRequest {
+  string user_id = 1; // ID пользователя (для проверки прав)
+  string subscription_id = 2; // ID запрашиваемой подписки
+}
+
+// Представление подписки (можно расширить)
+message Subscription {
+  string subscription_id = 1;
+  string user_id = 2;
+  string plan_id = 3;
+  string status = 4;
+  string stripe_customer_id = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  google.protobuf.Timestamp canceled_at = 9;
+}
+
+
+message GetSubscriptionResponse {
+  Subscription subscription = 1; // Возвращаем полную информацию о подписке
+}
+
+// Можно добавить запрос и ответ для получения всех подписок пользователя
+// message GetUserSubscriptionsRequest {
+//   string user_id = 1;
+// }
+//
+// message GetUserSubscriptionsResponse {
+//   repeated Subscription subscriptions = 1;
+// }
