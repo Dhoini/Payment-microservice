@@ -3,77 +3,72 @@ package payment
 import (
 	"context"
 	"errors"
-	"fmt" // Добавлено для заглушки email
+	"fmt"
 	"time"
 
 	"github.com/Dhoini/Payment-microservice/internal/services"
-	"github.com/Dhoini/Payment-microservice/pkg/logger" // <-- Используем ваш логгер
+	"github.com/Dhoini/Payment-microservice/pkg/logger"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// PaymentServer реализует gRPC сервер для PaymentService.
 type PaymentServer struct {
 	paymentService *services.PaymentService
-	log            *logger.Logger // <-- Используем ваш логгер
-	// ВАЖНО: в сгенерированном коде (*_grpc.pb.go) сервер должен встраивать
-	// UnimplementedPaymentServiceServer для прямой совместимости.
-	// Убедитесь, что эта строка есть в сгенерированном файле:
-	// type PaymentServiceServer interface { ... mustEmbedUnimplementedPaymentServiceServer() }
-	UnimplementedPaymentServiceServer // <--- Убедитесь, что эта строка есть/добавлена
+	log            *logger.Logger
+	UnimplementedPaymentServiceServer
 }
 
-// NewPaymentServer создает новый экземпляр PaymentServer.
-func NewPaymentServer(paymentService *services.PaymentService, log *logger.Logger) *PaymentServer { // <-- Используем ваш логгер
+func NewPaymentServer(paymentService *services.PaymentService, log *logger.Logger) *PaymentServer {
 	return &PaymentServer{
 		paymentService: paymentService,
-		log:            log, // Можно добавить .Named("PaymentGRPCServer"), если логгер поддерживает
+		log:            log,
 	}
 }
 
-// CreateSubscription создает подписку через gRPC.
 func (s *PaymentServer) CreateSubscription(ctx context.Context, req *CreateSubscriptionRequest) (*CreateSubscriptionResponse, error) {
-	s.log.Infow("gRPC CreateSubscription request received", "userID", req.UserId, "planID", req.PlanId)
+	s.log.Infow("gRPC CreateSubscription request received", "userID", req.UserId, "planID", req.PlanId, "idempotencyKey", req.IdempotencyKey)
 
-	// Создаем входную структуру для сервиса
-	// !!! ВНИМАНИЕ: Email пользователя не приходит в gRPC запросе. Откуда его взять?
-	// Варианты: 1) Добавить в proto-файл, 2) Запросить у User-сервиса, 3) Заглушка
-	userEmail := fmt.Sprintf("%s@example.com", req.UserId) // !!! ЗАГЛУШКА !!!
-	s.log.Warnw("Using placeholder email for Stripe customer creation", "userID", req.UserId, "email", userEmail)
+	// !!!  Получение UserID из контекста (после авторизации) !!!
+	// userID, ok := ctx.Value(ContextUserIDKey).(string)
+	// if !ok {
+	//  s.log.Errorw("UserID not found in context", "method", "CreateSubscription")
+	//  return nil, status.Errorf(codes.Unauthenticated, "UserID not found in context")
+	// }
 
 	input := services.CreateSubscriptionInput{
-		UserID:         req.UserId,
+		UserID:         req.UserId, //  !!!  Заменить на userID из контекста !!!
 		PlanID:         req.PlanId,
-		UserEmail:      userEmail, // Используем заглушку или полученный email
+		UserEmail:      fmt.Sprintf("%s@example.com", req.UserId), //  !!!  Временная заглушка !!!
 		IdempotencyKey: req.IdempotencyKey,
 	}
 
-	// Вызываем метод сервиса
 	output, err := s.paymentService.CreateSubscription(ctx, input)
 	if err != nil {
 		s.log.Errorw("Failed to create subscription via service", "error", err, "userID", req.UserId)
-		// Преобразуем ошибку сервиса в gRPC статус
 		return nil, mapErrorToGRPCStatus(err)
 	}
 
 	s.log.Infow("Subscription created successfully via gRPC", "subscriptionID", output.Subscription.SubscriptionID)
 
-	// Преобразуем результат сервиса в gRPC ответ
 	return &CreateSubscriptionResponse{
 		SubscriptionId: output.Subscription.SubscriptionID,
 		ClientSecret:   output.ClientSecret,
-		// Используем время из сохраненной сущности
-		CreatedAt: timestamppb.New(output.Subscription.CreatedAt),
+		CreatedAt:      timestamppb.New(output.Subscription.CreatedAt),
 	}, nil
 }
 
-// CancelSubscription отменяет подписку через gRPC.
 func (s *PaymentServer) CancelSubscription(ctx context.Context, req *CancelSubscriptionRequest) (*CancelSubscriptionResponse, error) {
-	s.log.Infow("gRPC CancelSubscription request received", "userID", req.UserId, "subscriptionID", req.SubscriptionId)
+	s.log.Infow("gRPC CancelSubscription request received", "userID", req.UserId, "subscriptionID", req.SubscriptionId, "idempotencyKey", req.IdempotencyKey)
 
-	// Вызываем метод сервиса
-	err := s.paymentService.CancelSubscription(ctx, req.UserId, req.SubscriptionId, req.IdempotencyKey)
+	// !!!  Получение UserID из контекста (после авторизации) !!!
+	// userID, ok := ctx.Value(ContextUserIDKey).(string)
+	// if !ok {
+	//  s.log.Errorw("UserID not found in context", "method", "CancelSubscription")
+	//  return nil, status.Errorf(codes.Unauthenticated, "UserID not found in context")
+	// }
+
+	err := s.paymentService.CancelSubscription(ctx, req.UserId, req.SubscriptionId, req.IdempotencyKey) //  !!!  Заменить на userID из контекста !!!
 	if err != nil {
 		s.log.Errorw("Failed to cancel subscription via service", "error", err, "subscriptionID", req.SubscriptionId)
 		return nil, mapErrorToGRPCStatus(err)
@@ -81,19 +76,23 @@ func (s *PaymentServer) CancelSubscription(ctx context.Context, req *CancelSubsc
 
 	s.log.Infow("Subscription canceled successfully via gRPC", "subscriptionID", req.SubscriptionId)
 
-	// Возвращаем успешный gRPC ответ
 	return &CancelSubscriptionResponse{
 		Success:    true,
-		CanceledAt: timestamppb.New(time.Now()), // Можно брать время из сервиса, если оно там возвращается
+		CanceledAt: timestamppb.New(time.Now()), //  !!!  Можно брать из сервиса, если возвращает время отмены !!!
 	}, nil
 }
 
-// GetSubscription получает детали подписки через gRPC.
 func (s *PaymentServer) GetSubscription(ctx context.Context, req *GetSubscriptionRequest) (*GetSubscriptionResponse, error) {
 	s.log.Infow("gRPC GetSubscription request received", "userID", req.UserId, "subscriptionID", req.SubscriptionId)
 
-	// Вызываем метод сервиса
-	subscription, err := s.paymentService.GetSubscriptionByID(ctx, req.UserId, req.SubscriptionId)
+	// !!!  Получение UserID из контекста (после авторизации) !!!
+	// userID, ok := ctx.Value(ContextUserIDKey).(string)
+	// if !ok {
+	//  s.log.Errorw("UserID not found in context", "method", "GetSubscription")
+	//  return nil, status.Errorf(codes.Unauthenticated, "UserID not found in context")
+	// }
+
+	subscription, err := s.paymentService.GetSubscriptionByID(ctx, req.UserId, req.SubscriptionId) //  !!!  Заменить на userID из контекста !!!
 	if err != nil {
 		s.log.Warnw("Failed to get subscription via service", "error", err, "subscriptionID", req.SubscriptionId)
 		return nil, mapErrorToGRPCStatus(err)
@@ -101,35 +100,30 @@ func (s *PaymentServer) GetSubscription(ctx context.Context, req *GetSubscriptio
 
 	s.log.Infow("Subscription retrieved successfully via gRPC", "subscriptionID", subscription.SubscriptionID)
 
-	// Преобразуем результат сервиса в gRPC ответ
 	var canceledAt *timestamppb.Timestamp
-	if subscription.CanceledAt != nil { // Проверяем, что время отмены не nil
+	if subscription.CanceledAt != nil {
 		canceledAt = timestamppb.New(*subscription.CanceledAt)
 	}
 
 	return &GetSubscriptionResponse{
 		SubscriptionId: subscription.SubscriptionID,
 		PlanId:         subscription.PlanID,
-		// Status: // В gRPC ответе нет статуса, можно добавить в proto если нужно
-		CreatedAt:  timestamppb.New(subscription.CreatedAt),
-		CanceledAt: canceledAt,
-		// StripeCustomerId: // Нет в gRPC ответе
+		CreatedAt:      timestamppb.New(subscription.CreatedAt),
+		CanceledAt:     canceledAt,
 	}, nil
 }
 
-// mapErrorToGRPCStatus преобразует ошибки из слоя сервиса в статусы gRPC.
 func mapErrorToGRPCStatus(err error) error {
 	switch {
 	case errors.Is(err, services.ErrSubscriptionNotFound):
 		return status.Error(codes.NotFound, err.Error())
-	case errors.Is(err, services.ErrPaymentFailed): // Пример другой ошибки
-		// Возможно, стоит использовать InvalidArgument или FailedPrecondition
+	case errors.Is(err, services.ErrPaymentFailed):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, services.ErrUserNotFound):
 		return status.Error(codes.NotFound, err.Error())
-	// TODO: Добавить обработку других специфических ошибок сервиса
+	case errors.Is(err, services.ErrInternalServer): //  !!!  Добавлено !!!
+		return status.Error(codes.Internal, err.Error())
 	default:
-		// Общая ошибка сервера для необработанных случаев
 		return status.Error(codes.Internal, "Internal server error")
 	}
 }
