@@ -1,0 +1,20 @@
+app:
+  port: "8080"
+  env: "development"
+database:
+  dsn: "postgres://admin:secretPass@postgres:5432/payment?sslmode=disable"
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+kafka:
+  brokers: ["localhost:9092"]
+  topic: "payment_topic"
+  groupId: "payment_group"
+stripe:
+  apiKey: "sk_test_YourSecretKeyHere"
+  webhookSecret: "whsec_YourWebhookSigningSecretHere" #
+grpc:
+  port: "50051"
+auth:
+  jwtSecret: "YourVerySecretKeyHere" # Замените на ваш СЕКРЕТНЫЙ ключ!

@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Color codes for console output
@@ -82,26 +83,21 @@ func colorForLevel(level LogLevel) string {
 	}
 }
 
-// log writes a formatted log message
 func (l *Logger) log(level LogLevel, format string, v ...interface{}) {
 	if level < l.level {
 		return
 	}
 
-	// Skip 2 stack frames to get the correct caller
 	file, line := getCallerInfo(2)
-
-	// Prepare log message
 	msg := fmt.Sprintf(format, v...)
-
-	// Get color for level
 	color := colorForLevel(level)
+	timestamp := time.Now().Format("2006-01-02 15:04:05") // Добавляем временную метку
 
-	// Construct log entry
-	logEntry := fmt.Sprintf("%s[%s]%s %s:%d - %s\n",
+	logEntry := fmt.Sprintf("%s[%s]%s %s %s:%d - %s\n",
 		color,
 		strings.ToUpper([]string{"DEBUG", "INFO", "WARN", "ERROR", "FATAL"}[level]),
 		reset,
+		timestamp, // Добавляем временную метку
 		file,
 		line,
 		msg,
@@ -112,49 +108,32 @@ func (l *Logger) log(level LogLevel, format string, v ...interface{}) {
 
 	fmt.Fprint(l.output, logEntry)
 
-	// Handle fatal level
 	if level == FATAL {
 		os.Exit(1)
 	}
 }
 
-// Debug logs a debug message
-func (l *Logger) Debug(format string, v ...interface{}) {
+// Debugw logs a debug message
+func (l *Logger) Debugw(format string, v ...interface{}) {
 	l.log(DEBUG, format, v...)
 }
 
-// Info logs an info message
-func (l *Logger) Info(format string, v ...interface{}) {
+// Infow logs an info message
+func (l *Logger) Infow(format string, v ...interface{}) {
 	l.log(INFO, format, v...)
 }
 
-// Warn logs a warning message
-func (l *Logger) Warn(format string, v ...interface{}) {
+// Warnw logs a warning message
+func (l *Logger) Warnw(format string, v ...interface{}) {
 	l.log(WARN, format, v...)
 }
 
-// Error logs an error message
-func (l *Logger) Error(format string, v ...interface{}) {
+// Errorw logs an error message
+func (l *Logger) Errorw(format string, v ...interface{}) {
 	l.log(ERROR, format, v...)
 }
 
-// Fatal logs a fatal message and exits
-func (l *Logger) Fatal(format string, v ...interface{}) {
+// Fatalw logs a fatal message and exits
+func (l *Logger) Fatalw(format string, v ...interface{}) {
 	l.log(FATAL, format, v...)
 }
-
-// Example usage
-/*
-func main() {
-	// Create a new logger with DEBUG level
-	logger := logger.New(logger.DEBUG)
-
-	logger.Debug("This is a debug message")
-	logger.Info("Application started with version %d", 1)
-	logger.Warn("Potential performance issue detected")
-	logger.Error("Failed to connect to database: %v", err)
-
-	// This will log and then exit the program
-	// logger.Fatal("Critical error occurred")
-}
-*/

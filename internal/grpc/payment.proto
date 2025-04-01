@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package payment;
+
+option go_package = "./;payment";
+
+import "google/protobuf/timestamp.proto";
+
+message CreateSubscriptionRequest {
+  string user_id = 1;
+  string plan_id = 2;
+  string idempotency_key = 3;
+}
+
+message CreateSubscriptionResponse {
+  string subscription_id = 1;
+  string client_secret = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+message CancelSubscriptionRequest {
+  string user_id = 1;
+  string subscription_id = 2;
+  string idempotency_key = 3;
+}
+
+message CancelSubscriptionResponse {
+  bool success = 1;
+  google.protobuf.Timestamp canceled_at = 2;
+}
+
+message GetSubscriptionRequest {
+  string user_id = 1;
+  string subscription_id = 2;
+}
+
+message GetSubscriptionResponse {
+  string subscription_id = 1;
+  string plan_id = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp canceled_at = 4;
+}
+
+service PaymentService {
+  rpc CreateSubscription(CreateSubscriptionRequest) returns (CreateSubscriptionResponse) {}
+  rpc CancelSubscription(CancelSubscriptionRequest) returns (CancelSubscriptionResponse) {}
+  rpc GetSubscription(GetSubscriptionRequest) returns (GetSubscriptionResponse) {}
+}
