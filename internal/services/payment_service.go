@@ -2,9 +2,10 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	stripe2 "github.com/stripe/stripe-go/v78"
+	"net/http" // <-- Добавлен импорт для http.StatusTooManyRequests
 	"time"
 
 	"github.com/Dhoini/Payment-microservice/internal/config"
@@ -12,34 +13,68 @@ import (
 	"github.com/Dhoini/Payment-microservice/internal/models"
 	"github.com/Dhoini/Payment-microservice/internal/repository"
 	"github.com/Dhoini/Payment-microservice/internal/stripe"
-	"github.com/Dhoini/Payment-microservice/pkg/logger" // <-- Используем ваш логгер
-	// "github.com/google/uuid"
+	"github.com/Dhoini/Payment-microservice/pkg/logger"
+
+	"github.com/cenkalti/backoff/v4"
+	stripego "github.com/stripe/stripe-go/v78"
 )
 
+// Определяем строковые константы для типов ошибок, которые нам нужны
+const (
+	// Используем stripego.ErrorType как тип для ясности
+	// stripego.ErrorType("...") - это просто приведение строки к типу stripego.ErrorType
+	StripeErrorTypeRateLimit      stripego.ErrorType = "rate_limit_error" // Обычно Rate Limit лучше ловить по коду 429
+	StripeErrorTypeAPIConnection  stripego.ErrorType = "api_connection_error"
+	StripeErrorTypeAPI            stripego.ErrorType = "api_error" // Эта константа уже есть в stripego, но для единообразия можно определить свою
+	StripeErrorTypeAuthentication stripego.ErrorType = "authentication_error"
+	StripeErrorTypeCard           stripego.ErrorType = "card_error"
+	StripeErrorTypeInvalidRequest stripego.ErrorType = "invalid_request_error"
+	StripeErrorTypePermission     stripego.ErrorType = "permission_error"
+	StripeErrorTypeIdempotency    stripego.ErrorType = "idempotency_error"
+)
+
+// --- Определения кастомных ошибок сервиса ---
 var (
 	ErrSubscriptionNotFound = errors.New("subscription not found")
-	ErrUserNotFound         = errors.New("user not found")
-	ErrPaymentFailed        = errors.New("payment failed")
-	ErrInternalServer       = errors.New("internal server error")
+	ErrUserNotFound         = errors.New("user not found")            // Если сервис проверяет пользователя
+	ErrPaymentFailed        = errors.New("payment processing failed") // Общая ошибка платежа
+	ErrStripeClient         = errors.New("stripe client error")       // Ошибка взаимодействия со Stripe
+	ErrInternalServer       = errors.New("internal server error")     // Общая внутренняя ошибка
+	ErrInvalidInput         = errors.New("invalid input data")        // Ошибка валидации входных данных
 )
 
-// PaymentService обрабатывает бизнес-логику, связанную с платежами и подписками.
+type CreateSubscriptionInput struct {
+	UserID         string
+	PlanID         string
+	UserEmail      string
+	IdempotencyKey string
+}
+
+type CreateSubscriptionOutput struct {
+	Subscription *models.Subscription
+	ClientSecret string
+}
+
 type PaymentService struct {
 	cfg           *config.Config
 	subRepo       repository.SubscriptionRepository
 	stripeClient  stripe.Client
-	kafkaProducer kafka.Producer
-	log           *logger.Logger // <-- Используем ваш логгер
+	kafkaProducer kafka.Producer // Может быть nil, если Kafka недоступен
+	log           *logger.Logger
 }
 
-// NewPaymentService создает новый экземпляр PaymentService.
+// NewPaymentService конструктор сервиса
 func NewPaymentService(
 	cfg *config.Config,
 	subRepo repository.SubscriptionRepository,
 	stripeClient stripe.Client,
-	kafkaProducer kafka.Producer,
-	log *logger.Logger, // <-- Используем ваш логгер
+	kafkaProducer kafka.Producer, // Принимаем интерфейс, может быть nil
+	log *logger.Logger,
 ) *PaymentService {
+	// Логируем, если Kafka продюсер не инициализирован
+	if kafkaProducer == nil {
+		log.Warnw("Kafka producer is nil, event publishing will be skipped.")
+	}
 	return &PaymentService{
 		cfg:           cfg,
 		subRepo:       subRepo,
@@ -49,370 +84,643 @@ func NewPaymentService(
 	}
 }
 
-// CreateSubscriptionInput ... (входные данные для создания подписки)
-type CreateSubscriptionInput struct {
-	UserID         string
-	PlanID         string
-	UserEmail      string
-	IdempotencyKey string
-}
-
-// CreateSubscriptionOutput ... (выходные данные после создания подписки)
-type CreateSubscriptionOutput struct {
-	Subscription *models.Subscription
-	ClientSecret string
-}
-
-// CreateSubscription создает новую подписку для пользователя.
+// CreateSubscription основной метод создания подписки (без retry логики здесь)
+// Retry логика может быть добавлена выше (в хендлерах) или остаться в CreateSubscriptionWithRetry
 func (s *PaymentService) CreateSubscription(ctx context.Context, input CreateSubscriptionInput) (*CreateSubscriptionOutput, error) {
-	s.log.Infow("Attempting to create subscription", "userID", input.UserID, "planID", input.PlanID)
-
-	// --- Получение или создание клиента Stripe ---
-	if input.UserEmail == "" {
-		s.log.Errorw("User email is required to create Stripe customer")
-		input.UserEmail = fmt.Sprintf("%s@example.com", input.UserID) // !!! ЗАГЛУШКА !!!
-		s.log.Warnw("Using placeholder email for Stripe customer creation", "userID", input.UserID, "email", input.UserEmail)
+	// Базовая валидация на уровне сервиса
+	if input.UserID == "" || input.PlanID == "" || input.UserEmail == "" {
+		s.log.Warnw("CreateSubscription called with invalid input. UserID: %s, PlanID: %s, Email: %s", input.UserID, input.PlanID, input.UserEmail)
+		return nil, ErrInvalidInput // Возвращаем ошибку валидации
 	}
+
+	s.log.Infow("Starting CreateSubscription process. UserID: %s, PlanID: %s", input.UserID, input.PlanID)
+	startTime := time.Now()
+
+	// Получаем или создаем клиента Stripe
+	// Используем errgroup для параллельного выполнения, если это имеет смысл (здесь нет)
 	stripeCustomerID, err := s.stripeClient.GetOrCreateCustomer(ctx, input.UserID, input.UserEmail)
 	if err != nil {
-		s.log.Errorw("Failed to get or create Stripe customer", "error", err)
-		return nil, fmt.Errorf("stripe customer error: %w", err)
+		// Оборачиваем ошибку Stripe для консистентности
+		s.log.Errorw("Failed to get or create Stripe customer. UserID: %s, Error: %v", input.UserID, err)
+		return nil, fmt.Errorf("%w: failed to process customer: %v", ErrStripeClient, err)
 	}
-	s.log.Infow("Got Stripe customer ID", "stripeCustomerID", stripeCustomerID)
+	s.log.Debugw("Stripe customer processed. UserID: %s, StripeCustomerID: %s", input.UserID, stripeCustomerID)
 
-	// --- Создание подписки в Stripe ---
+	// Создаем подписку в Stripe
 	stripeSubID, clientSecret, err := s.stripeClient.CreateSubscription(ctx, stripeCustomerID, input.PlanID, input.IdempotencyKey)
 	if err != nil {
-		s.log.Errorw("Failed to create Stripe subscription", "error", err)
-		// TODO: Более детальная обработка ошибок Stripe (карта отклонена и т.д.) -> вернуть ErrPaymentFailed?
-		return nil, fmt.Errorf("stripe subscription creation failed: %w", err)
+		// Логируем детали ошибки Stripe
+		s.trackStripeError(err, input)
+		// Оборачиваем ошибку
+		// Проверяем специфичные ошибки, которые могут быть важны для клиента
+		var stripeErr *stripego.Error
+		if errors.As(err, &stripeErr) {
+			if stripeErr.Type == StripeErrorTypeCard || stripeErr.Type == StripeErrorTypeInvalidRequest {
+				// Ошибки карты или неверного запроса часто означают проблемы с данными клиента
+				return nil, fmt.Errorf("%w: %s", ErrPaymentFailed, stripeErr.Msg)
+			}
+		}
+		// Общая ошибка Stripe
+		return nil, fmt.Errorf("%w: failed to create subscription: %v", ErrStripeClient, err)
 	}
-	s.log.Infow("Stripe subscription created", "stripeSubscriptionID", stripeSubID)
 
-	// --- Сохранение подписки в БД ---
-	now := time.Now()
-	newSub := &models.Subscription{
-		SubscriptionID:   stripeSubID, // Используем Stripe ID как основной ID
+	duration := time.Since(startTime)
+	s.log.Infow("Stripe subscription created successfully. UserID: %s, PlanID: %s, StripeSubID: %s, DurationMs: %d",
+		input.UserID, input.PlanID, stripeSubID, duration.Milliseconds())
+
+	// Создаем модель подписки для сохранения и отправки события
+	// ВАЖНО: Статус из Stripe может быть не 'active' сразу (например, 'incomplete')
+	// Нужно получить актуальный статус из Stripe или обрабатывать вебхуки
+	// Пока оставляем 'incomplete' как более безопасный дефолт после создания с default_incomplete
+	// или получаем статус из Stripe ответа, если он там есть.
+	// stripe.Client.CreateSubscription должен возвращать статус.
+	// Предположим, что stripe.Client.CreateSubscription возвращает и статус:
+	// stripeSubID, clientSecret, stripeStatus, err := s.stripeClient.CreateSubscription(...)
+	subscriptionStatus := "incomplete" // Безопасное значение по умолчанию
+	// TODO: Получить реальный статус из ответа Stripe, если stripeClient его возвращает
+
+	subscription := &models.Subscription{
+		SubscriptionID:   stripeSubID, // Используем ID из Stripe
 		UserID:           input.UserID,
 		PlanID:           input.PlanID,
+		Status:           subscriptionStatus, // Используем статус из Stripe
 		StripeCustomerID: stripeCustomerID,
-		Status:           "pending", // Начальный статус, изменится после вебхука
-		CreatedAt:        now,
-		UpdatedAt:        now,
-		// ExpiresAt и CanceledAt остаются nil
+		// CreatedAt и UpdatedAt будут установлены репозиторием при сохранении
 	}
-	if err := s.subRepo.Create(ctx, newSub); err != nil {
-		s.log.Errorw("Failed to save subscription to DB", "error", err)
-		// TODO: Попытка отката создания подписки в Stripe? Или фоновая задача реконсиляции.
-		return nil, fmt.Errorf("failed to save subscription locally: %w", err)
+
+	// Опционально: Синхронное сохранение в БД (если нужно)
+	// err = s.subRepo.Create(ctx, subscription)
+	// if err != nil {
+	//     s.log.Errorw("Failed to save subscription to local DB synchronously. UserID: %s, StripeSubID: %s, Error: %v", input.UserID, stripeSubID, err)
+	//     // Решить, является ли это фатальной ошибкой для потока
+	//     // Можно попытаться откатить Stripe (сложно) или просто вернуть ошибку
+	//     return nil, fmt.Errorf("%w: failed to save subscription locally: %v", ErrInternalServer, err)
+	// }
+	// s.log.Infow("Subscription saved to local DB synchronously. UserID: %s, StripeSubID: %s", input.UserID, stripeSubID)
+
+	// Асинхронная отправка события в Kafka (если продюсер доступен)
+	if s.kafkaProducer != nil {
+		// Запускаем в горутине, чтобы не блокировать ответ
+		go s.publishSubscriptionEvent(context.WithoutCancel(ctx), subscription) // Используем новый контекст для горутины
 	}
-	s.log.Infow("Subscription saved to DB", "subscriptionID", newSub.SubscriptionID)
 
-	// --- Публикация события в Kafka (асинхронно) ---
-	go func(subToPublish *models.Subscription) { // Передаем копию или указатель в горутину
-		kafkaCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.kafkaProducer.PublishSubscriptionEvent(kafkaCtx, kafka.TopicSubscriptionCreated, subToPublish); err != nil {
-			s.log.Errorw("Failed to publish subscription created event to Kafka", "error", err, "subscriptionID", subToPublish.SubscriptionID)
-		} else {
-			s.log.Infow("Subscription created event published to Kafka", "subscriptionID", subToPublish.SubscriptionID)
-		}
-	}(newSub) // Передаем созданную подписку
-
-	// --- Формирование ответа ---
-	output := &CreateSubscriptionOutput{
-		Subscription: newSub,
+	return &CreateSubscriptionOutput{
+		Subscription: subscription, // Возвращаем модель с ID и статусом
 		ClientSecret: clientSecret,
+	}, nil
+}
+
+// CreateSubscriptionWithRetry - обертка с логикой повторных попыток (можно оставить)
+func (s *PaymentService) CreateSubscriptionWithRetry(ctx context.Context, input CreateSubscriptionInput) (*CreateSubscriptionOutput, error) {
+	var output *CreateSubscriptionOutput
+	var lastErr error // Сохраняем последнюю ошибку для логирования
+
+	operation := func() error {
+		var err error
+		// Вызываем основной метод без retry внутри него
+		output, err = s.CreateSubscription(ctx, input)
+		lastErr = err // Сохраняем ошибку
+		if err != nil {
+			if isRetryableStripeError(err) {
+				s.log.Warnw("Retryable Stripe error occurred, retrying... UserID: %s, Error: %v", input.UserID, err)
+				return err // Возвращаем ошибку, чтобы backoff сработал
+			}
+			// Ошибка неretryable, прекращаем попытки
+			s.log.Warnw("Non-retryable error occurred, stopping retries. UserID: %s, Error: %v", input.UserID, err)
+			return backoff.Permanent(err)
+		}
+		// Успех
+		return nil
 	}
-	s.log.Infow("Subscription created successfully")
+
+	// Настройка backoff
+	bo := backoff.NewExponentialBackOff()
+	bo.MaxInterval = 15 * time.Second   // Максимальный интервал между попытками
+	bo.MaxElapsedTime = 1 * time.Minute // Максимальное общее время на попытки
+	bo.Reset()                          // Сброс перед использованием
+
+	// Запуск retry
+	err := backoff.Retry(operation, bo)
+
+	// Если после всех попыток осталась ошибка
+	if err != nil {
+		s.log.Errorw("Failed to create subscription after all retries. UserID: %s, LastError: %v",
+			input.UserID,
+			lastErr, // Логируем последнюю полученную ошибку
+		)
+		// Возвращаем последнюю ошибку, обернутую или как есть
+		return nil, lastErr
+	}
+
+	// Успех после ретраев (или с первой попытки)
 	return output, nil
 }
 
-// CancelSubscription отменяет подписку пользователя.
-func (s *PaymentService) CancelSubscription(ctx context.Context, userID, subscriptionID, idempotencyKey string) error {
-	// IdempotencyKey здесь может быть не так важен, т.к. Stripe API отмены обычно идемпотентен сам
-	s.log.Infow("Attempting to cancel subscription", "userID", userID, "subscriptionID", subscriptionID)
+// publishSubscriptionEvent отправляет событие в Kafka
+func (s *PaymentService) publishSubscriptionEvent(ctx context.Context, subscription *models.Subscription) {
+	// Проверяем, инициализирован ли продюсер
+	if s.kafkaProducer == nil {
+		s.log.Warnw("Kafka producer not available, skipping event publishing for SubscriptionID: %s", subscription.SubscriptionID)
+		return
+	}
 
-	// --- Поиск подписки в БД ---
-	sub, err := s.subRepo.GetByID(ctx, subscriptionID)
+	// Используем контекст с таймаутом для операции Kafka
+	kafkaCtx, cancel := context.WithTimeout(ctx, 10*time.Second) // Увеличил таймаут
+	defer cancel()
+
+	err := s.kafkaProducer.PublishSubscriptionEvent(kafkaCtx, kafka.TopicSubscriptionCreated, subscription)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			s.log.Warnw("Subscription not found in DB for cancellation", "subscriptionID", subscriptionID)
-			return ErrSubscriptionNotFound
-		}
-		s.log.Errorw("Failed to get subscription from DB for cancellation", "error", err)
-		return ErrInternalServer
+		// Логируем ошибку, но не прерываем основной поток
+		s.log.Errorw("Failed to publish subscription created event. SubscriptionID: %s, Error: %v",
+			subscription.SubscriptionID, err)
+		// TODO: Рассмотреть механизм retry или отправки в dead-letter queue для Kafka
+	} else {
+		s.log.Infow("Subscription created event published successfully. SubscriptionID: %s", subscription.SubscriptionID)
 	}
-
-	// --- Проверка владельца и статуса ---
-	if sub.UserID != userID {
-		s.log.Warnw("User does not own this subscription", "subscriptionID", subscriptionID, "ownerUserID", sub.UserID, "requesterUserID", userID)
-		return ErrSubscriptionNotFound // Скрываем детали из соображений безопасности
-	}
-	if sub.Status == "canceled" {
-		s.log.Infow("Subscription already canceled", "subscriptionID", subscriptionID)
-		return nil // Идемпотентность
-	}
-
-	// --- Отмена подписки в Stripe ---
-	err = s.stripeClient.CancelSubscription(ctx, sub.SubscriptionID) // Используем ID подписки
-	if err != nil {
-		// Ошибка уже логируется внутри stripeClient при вызове logStripeError
-		// Но можно добавить контекст здесь, если нужно
-		s.log.Errorw("Stripe client failed to cancel subscription", "error", err, "subscriptionID", subscriptionID)
-		// Если stripeClient вернул nil при ошибке "уже отменено", то здесь будет nil
-		// Если он вернул ошибку, то возвращаем ее дальше
-		return fmt.Errorf("stripe subscription cancellation failed: %w", err)
-	}
-	s.log.Infow("Stripe subscription successfully canceled", "subscriptionID", subscriptionID)
-
-	// --- Обновление статуса в БД ---
-	now := time.Now()
-	sub.Status = "canceled"
-	sub.CanceledAt = &now
-	sub.UpdatedAt = now
-	if err := s.subRepo.Update(ctx, sub); err != nil {
-		s.log.Errorw("Failed to update subscription status to canceled in DB", "error", err, "subscriptionID", subscriptionID)
-		// TODO: Критическая ситуация - Stripe отменена, БД нет. Нужна реконсиляция.
-		return ErrInternalServer
-	}
-	s.log.Infow("Subscription status updated to canceled in DB", "subscriptionID", subscriptionID)
-
-	// --- Публикация события в Kafka (асинхронно) ---
-	go func(subToPublish *models.Subscription) {
-		kafkaCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.kafkaProducer.PublishSubscriptionEvent(kafkaCtx, kafka.TopicSubscriptionCancelled, subToPublish); err != nil {
-			s.log.Errorw("Failed to publish subscription cancelled event to Kafka", "error", err, "subscriptionID", subToPublish.SubscriptionID)
-		} else {
-			s.log.Infow("Subscription cancelled event published to Kafka", "subscriptionID", subToPublish.SubscriptionID)
-		}
-	}(sub) // Передаем обновленную подписку
-
-	s.log.Infow("Subscription canceled successfully", "subscriptionID", subscriptionID)
-	return nil
 }
 
-// GetSubscriptionByID получает детали подписки по ID.
-func (s *PaymentService) GetSubscriptionByID(ctx context.Context, userID, subscriptionID string) (*models.Subscription, error) {
-	s.log.Debugw("Getting subscription by ID", "userID", userID, "subscriptionID", subscriptionID)
+// trackStripeError логирует детали ошибки Stripe
+func (s *PaymentService) trackStripeError(err error, input CreateSubscriptionInput) {
+	var stripeErr *stripego.Error
+	if errors.As(err, &stripeErr) {
+		// Используем строковые константы для типов
+		errorType := stripeErr.Type
+		logLevel := s.log.Warnw // По умолчанию - Warning
 
-	// --- Получение из репозитория ---
-	sub, err := s.subRepo.GetByID(ctx, subscriptionID)
+		// Ошибки API, Connection, Authentication, RateLimit - обычно более серьезные
+		if errorType == StripeErrorTypeAPI ||
+			errorType == StripeErrorTypeAPIConnection ||
+			errorType == StripeErrorTypeAuthentication ||
+			(stripeErr.HTTPStatusCode == http.StatusTooManyRequests) { // Явная проверка Rate Limit по коду
+			logLevel = s.log.Errorw
+		}
+
+		logLevel("Stripe API error occurred during subscription creation. UserID: %s, PlanID: %s, Type: %s, Code: %s, Param: %s, Msg: %s, RequestID: %s, StatusCode: %d",
+			input.UserID,
+			input.PlanID,
+			string(errorType),      // Приводим тип к строке
+			string(stripeErr.Code), // Приводим код к строке
+			stripeErr.Param,
+			stripeErr.Msg,
+			stripeErr.RequestID,
+			stripeErr.HTTPStatusCode,
+		)
+	} else {
+		// Логируем не-Stripe ошибку, если она произошла во время операции Stripe
+		s.log.Errorw("Non-Stripe error during Stripe operation. UserID: %s, PlanID: %s, Error: %v", input.UserID, input.PlanID, err)
+	}
+}
+
+// isRetryableStripeError проверяет, является ли ошибка Stripe подходящей для повторной попытки
+func isRetryableStripeError(err error) bool {
+	var stripeErr *stripego.Error
+	if errors.As(err, &stripeErr) {
+		// Rate Limit (часто лучше ловить по коду 429)
+		if stripeErr.HTTPStatusCode == http.StatusTooManyRequests {
+			return true
+		}
+		// Ошибки соединения API
+		if stripeErr.Type == StripeErrorTypeAPIConnection {
+			return true
+		}
+		// Некоторые ошибки API сервера Stripe (5xx) могут быть временными
+		if stripeErr.HTTPStatusCode >= 500 && stripeErr.HTTPStatusCode != http.StatusNotImplemented { // 501 обычно не retryable
+			return true
+		}
+	}
+	// Ошибка блокировки (Idempotency error) - не retryable с тем же ключом
+	// if errors.Is(err, &stripe.IdempotencyError{}) { // Пример проверки специфичной ошибки библиотеки
+	//     return false
+	// }
+
+	return false
+}
+
+// --- Методы для Get/Cancel ---
+
+// GetSubscriptionByID получает подписку по ID, проверяя принадлежность пользователю
+func (s *PaymentService) GetSubscriptionByID(ctx context.Context, userID, subscriptionID string) (*models.Subscription, error) {
+	s.log.Infow("Fetching subscription by ID. UserID: %s, SubscriptionID: %s", userID, subscriptionID)
+	sub, err := s.subRepo.GetByID(ctx, subscriptionID) // Получаем из репозитория
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			s.log.Warnw("Subscription not found by ID", "subscriptionID", subscriptionID)
+		if errors.Is(err, repository.ErrNotFound) { // Используем ошибку из репозитория
+			s.log.Warnw("Subscription not found in repository. SubscriptionID: %s", subscriptionID)
 			return nil, ErrSubscriptionNotFound
 		}
-		s.log.Errorw("Failed to get subscription by ID from DB", "error", err, "subscriptionID", subscriptionID)
-		return nil, ErrInternalServer
+		s.log.Errorw("Failed to get subscription from repository. SubscriptionID: %s, Error: %v", subscriptionID, err)
+		return nil, fmt.Errorf("%w: %v", ErrInternalServer, err) // Оборачиваем внутреннюю ошибку
 	}
 
-	// --- Проверка владельца ---
+	// Проверка принадлежности подписки пользователю
 	if sub.UserID != userID {
-		s.log.Warnw("User attempted to access another user's subscription", "subscriptionID", subscriptionID, "ownerUserID", sub.UserID, "requesterUserID", userID)
-		return nil, ErrSubscriptionNotFound // Скрываем факт существования
+		s.log.Warnw("User attempted to access subscription belonging to another user. RequesterID: %s, OwnerID: %s, SubscriptionID: %s",
+			userID, sub.UserID, subscriptionID)
+		// Важно не раскрывать информацию о существовании подписки, возвращаем NotFound
+		return nil, ErrSubscriptionNotFound
 	}
 
-	s.log.Debugw("Subscription retrieved successfully by ID", "subscriptionID", subscriptionID)
+	s.log.Infow("Subscription retrieved successfully. UserID: %s, SubscriptionID: %s", userID, subscriptionID)
 	return sub, nil
 }
 
-// GetSubscriptionsByUserID получает все подписки пользователя.
+// GetSubscriptionsByUserID получает все подписки пользователя
 func (s *PaymentService) GetSubscriptionsByUserID(ctx context.Context, userID string) ([]models.Subscription, error) {
-	s.log.Debugw("Getting subscriptions by user ID", "userID", userID)
-
-	// --- Получение из репозитория ---
+	s.log.Infow("Fetching subscriptions for UserID: %s", userID)
 	subs, err := s.subRepo.GetByUserID(ctx, userID)
-	// Обрабатываем конец вставки из вашего предыдущего сообщения
 	if err != nil {
-		// Ошибку ErrNotFound от репозитория не считаем фатальной для списка,
-		// просто возвращаем пустой слайс (это не ошибка с точки зрения API).
-		if errors.Is(err, repository.ErrNotFound) {
-			s.log.Debugw("No subscriptions found for user in DB", "userID", userID)
-			return []models.Subscription{}, nil // Возвращаем пустой слайс, а не ошибку
-		}
-		// Другие ошибки БД логируем и возвращаем как внутреннюю ошибку сервера
-		s.log.Errorw("Failed to get subscriptions by user ID from DB", "error", err, "userID", userID)
-		return nil, ErrInternalServer
+		// Ошибка репозитория (кроме NotFound, т.к. пустой список - не ошибка)
+		s.log.Errorw("Failed to get subscriptions from repository for UserID: %s. Error: %v", userID, err)
+		return nil, fmt.Errorf("%w: %v", ErrInternalServer, err)
 	}
-	// КОНЕЦ ДОБАВЛЕННОГО КОДА ДЛЯ GetSubscriptionsByUserID
-
-	s.log.Debugw("Subscriptions retrieved successfully by user ID", "userID", userID, "count", len(subs))
+	s.log.Infow("Subscriptions retrieved for UserID: %s. Count: %d", userID, len(subs))
 	return subs, nil
 }
 
-// HandleWebhookEvent обрабатывает событие от Stripe (вызывается из webhook_handler).
-func (s *PaymentService) HandleWebhookEvent(ctx context.Context, eventType stripe2.EventType, stripeSubscriptionID string, data map[string]interface{}) error {
-	// Вместо With, будем добавлять в каждый вызов:
-	s.log.Infow("Handling webhook event", "eventType", eventType, "stripeSubscriptionID", stripeSubscriptionID)
+// CancelSubscription отменяет подписку
+func (s *PaymentService) CancelSubscription(ctx context.Context, userID, subscriptionID, idempotencyKey string) error {
+	s.log.Infow("Attempting to cancel subscription. UserID: %s, SubscriptionID: %s", userID, subscriptionID)
 
-	// Если ID подписки не был извлечен хендлером, но он критичен для события
-	if stripeSubscriptionID == "" && s.isSubscriptionEvent(eventType) {
-		s.log.Errorw("Missing Stripe Subscription ID for a subscription-related webhook event", "eventType", eventType)
-		// Можно вернуть ошибку, если ID обязателен, или попробовать найти его иначе.
-		// Пока просто логируем и продолжаем (может, ID не нужен для этого eventType).
-		// return errors.New("missing subscription ID for event")
-	}
-
-	// 1. Найти подписку по Stripe ID (если ID есть)
-	var sub *models.Subscription
-	var err error
-	if stripeSubscriptionID != "" {
-		sub, err = s.subRepo.GetByStripeSubscriptionID(ctx, stripeSubscriptionID)
-		if err != nil {
-			if errors.Is(err, repository.ErrNotFound) {
-				s.log.Warnw("Received webhook for unknown subscription ID", "eventType", eventType, "stripeSubscriptionID", stripeSubscriptionID)
-				// Что делать? Зависит от события.
-				// Если это invoice.paid для НОВОЙ подписки, которой еще нет в БД (теоретически возможно при рассинхроне),
-				// может, нужно попытаться ее создать? Или просто игнорировать.
-				// Пока игнорируем неизвестные подписки.
-				return nil // Возвращаем nil, чтобы Stripe не повторял попытку
-			}
-			s.log.Errorw("Failed to get subscription by Stripe ID from DB", "error", err, "stripeSubscriptionID", stripeSubscriptionID)
-			return ErrInternalServer // Возвращаем ошибку, чтобы Stripe ПОВТОРИЛ попытку (проблема с БД)
+	// 1. Получить подписку из нашей БД, чтобы проверить владельца
+	sub, err := s.subRepo.GetByID(ctx, subscriptionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			s.log.Warnw("Subscription to cancel not found in repository. SubscriptionID: %s", subscriptionID)
+			return ErrSubscriptionNotFound
 		}
-		s.log.Infow("Found subscription in DB for webhook", "subscriptionID", sub.SubscriptionID, "currentStatus", sub.Status)
-	} else {
-		s.log.Warnw("Handling webhook event without a resolved Subscription ID", "eventType", eventType)
-		// Обработка событий, не связанных напрямую с подпиской (например, customer.created?)
+		s.log.Errorw("Failed to get subscription before cancellation. SubscriptionID: %s, Error: %v", subscriptionID, err)
+		return fmt.Errorf("%w: failed to verify subscription owner: %v", ErrInternalServer, err)
 	}
 
-	// 2. Обработать в зависимости от типа события
-	needsUpdate := false // Флаг, что нужно обновить подписку в БД
-	now := time.Now()
+	// 2. Проверить владельца
+	if sub.UserID != userID {
+		s.log.Warnw("User attempted to cancel subscription belonging to another user. RequesterID: %s, OwnerID: %s, SubscriptionID: %s",
+			userID, sub.UserID, subscriptionID)
+		return ErrSubscriptionNotFound // Возвращаем NotFound из соображений безопасности
+	}
+
+	// 3. Проверить статус (можно ли отменить?)
+	if sub.Status == "canceled" {
+		s.log.Warnw("Attempted to cancel an already canceled subscription. UserID: %s, SubscriptionID: %s", userID, subscriptionID)
+		return nil // Считаем операцию успешной, если уже отменена
+	}
+
+	// 4. Отменить подписку в Stripe
+	// TODO: Добавить передачу idempotencyKey в Stripe клиент, если API Stripe поддерживает это для отмены
+	err = s.stripeClient.CancelSubscription(ctx, subscriptionID)
+	if err != nil {
+		// Логируем ошибку Stripe
+		s.trackStripeError(err, CreateSubscriptionInput{UserID: userID, PlanID: sub.PlanID}) // Передаем данные для логирования
+		s.log.Errorw("Stripe failed to cancel subscription. UserID: %s, SubscriptionID: %s, Error: %v", userID, subscriptionID, err)
+		return fmt.Errorf("%w: failed to cancel stripe subscription: %v", ErrStripeClient, err)
+	}
+	s.log.Infow("Subscription successfully canceled in Stripe. UserID: %s, SubscriptionID: %s", userID, subscriptionID)
+
+	// 5. Обновить статус в локальной БД (или дождаться вебхука)
+	// Если полагаемся на вебхуки, этот шаг не нужен.
+	// Если обновляем здесь, нужно быть готовым к рассогласованию, если вебхук придет позже/раньше.
+	// Пример синхронного обновления:
+	// now := time.Now()
+	// sub.Status = "canceled"
+	// sub.CanceledAt = &now
+	// sub.UpdatedAt = now
+	// err = s.subRepo.Update(ctx, sub)
+	// if err != nil {
+	//     s.log.Errorw("Failed to update local subscription status after cancellation. UserID: %s, SubscriptionID: %s, Error: %v", userID, subscriptionID, err)
+	//     // Ошибка некритична для пользователя, но требует мониторинга
+	// } else {
+	//     s.log.Infow("Local subscription status updated to 'canceled'. UserID: %s, SubscriptionID: %s", userID, subscriptionID)
+	// }
+
+	// 6. Отправить событие об отмене в Kafka (если нужно)
+	if s.kafkaProducer != nil {
+		// Создаем модель для события (может отличаться от основной)
+		canceledEventSub := *sub // Копируем
+		now := time.Now()
+		canceledEventSub.Status = "canceled"
+		canceledEventSub.CanceledAt = &now                                           // Устанавливаем время для события
+		go s.publishSubscriptionEvent(context.WithoutCancel(ctx), &canceledEventSub) // Используем копию
+	}
+
+	return nil
+}
+
+// HandleWebhookEvent обрабатывает события из вебхуков Stripe
+func (s *PaymentService) HandleWebhookEvent(ctx context.Context, eventType stripego.EventType, eventSubscriptionID string, data map[string]interface{}) error {
+	// eventSubscriptionID из хендлера может быть неточным для invoice.* событий,
+	// лучше извлекать ID из самого объекта `data`.
+
+	s.log.Infow("Handling webhook event. Type: %s", eventType)
 
 	switch eventType {
-	// --- Успешные платежи ---
-	case "invoice.paid":
-		if sub == nil {
-			s.log.Warnw("invoice.paid event received but no corresponding subscription found/resolved", "eventType", eventType)
-			return nil // Игнорировать
-		}
-		s.log.Infow("Processing invoice.paid event", "subscriptionID", sub.SubscriptionID)
-		// Обновляем статус на 'active', если он еще не такой
-		if sub.Status != "active" {
-			sub.Status = "active"
-			// Можно извлечь период подписки из `data` (если нужно) и вычислить ExpiresAt
-			// expiresAt := s.calculateExpiresAt(data)
-			// sub.ExpiresAt = expiresAt
-			needsUpdate = true
-			s.log.Infow("Subscription status set to active", "subscriptionID", sub.SubscriptionID)
-			// TODO: Опубликовать событие в Kafka? (subscription_activated)
-		} else {
-			s.log.Infow("Subscription already active, processing renewal payment", "subscriptionID", sub.SubscriptionID)
-			// Можно обновить ExpiresAt при продлении
-			// expiresAt := s.calculateExpiresAt(data)
-			// if sub.ExpiresAt == nil || (expiresAt != nil && expiresAt.After(*sub.ExpiresAt)) {
-			// 	sub.ExpiresAt = expiresAt
-			//  needsUpdate = true
-			// }
+
+	case "customer.subscription.created":
+		// Часто это событие приходит ПОСЛЕ вашего CreateSubscription.
+		// Может использоваться для дополнительной синхронизации или если подписки создаются только через Stripe UI.
+		subID := getStringValue(data, "id")
+		status := getStringValue(data, "status")
+		s.log.Infow("Webhook 'customer.subscription.created' received. StripeSubID: %s, Status: %s", subID, status)
+		// Можно найти подписку по ID и обновить статус, если он отличается от того, что записали при создании.
+		// Либо просто игнорировать, если создание идет через API сервиса.
+		_, err := s.findAndUpdateSubscriptionStatus(ctx, subID, status, data) // Пример вызова хелпера
+		if err != nil && !errors.Is(err, ErrSubscriptionNotFound) {           // Игнорируем NotFound, если подписку еще не успели создать локально
+			return fmt.Errorf("failed processing subscription.created: %w", err)
 		}
 
-	// --- Неуспешные платежи ---
-	case "invoice.payment_failed":
-		if sub == nil {
-			s.log.Warnw("invoice.payment_failed event received but no corresponding subscription found/resolved", "eventType", eventType)
-			return nil
-		}
-		s.log.Warnw("Processing invoice.payment_failed event", "subscriptionID", sub.SubscriptionID)
-		// Обновляем статус на 'past_due' или 'payment_failed'
-		// Зависит от настроек Stripe Dunning (автоматические попытки оплаты)
-		if sub.Status != "canceled" { // Не меняем статус, если уже отменена
-			sub.Status = "past_due" // Или другой статус, соответствующий неуспешной оплате
-			needsUpdate = true
-			s.log.Infow("Subscription status set to past_due", "subscriptionID", sub.SubscriptionID)
-			// TODO: Опубликовать событие в Kafka? (subscription_payment_failed)
-			// TODO: Отправить уведомление пользователю?
-		}
-
-	// --- Отмена / Удаление подписки ---
-	case "customer.subscription.deleted": // Подписка удалена в Stripe (часто после отмены и окончания периода)
-		if sub == nil {
-			s.log.Warnw("customer.subscription.deleted event received but no corresponding subscription found/resolved", "eventType", eventType)
-			return nil
-		}
-		s.log.Infow("Processing customer.subscription.deleted event", "subscriptionID", sub.SubscriptionID)
-		// Обновляем статус на 'canceled', если еще не отменена
-		if sub.Status != "canceled" {
-			sub.Status = "canceled"
-			if sub.CanceledAt == nil { // Если отмена произошла в Stripe, а не через наш API
-				sub.CanceledAt = &now
-			}
-			needsUpdate = true
-			s.log.Infow("Subscription status set to canceled", "subscriptionID", sub.SubscriptionID)
-			// TODO: Опубликовать событие в Kafka? (subscription_truly_ended)
-		}
-
-	// --- Обновление подписки (например, смена плана, статуса извне) ---
 	case "customer.subscription.updated":
-		if sub == nil {
-			s.log.Warnw("customer.subscription.updated event received but no corresponding subscription found/resolved", "eventType", eventType)
-			return nil
-		}
-		s.log.Infow("Processing customer.subscription.updated event", "subscriptionID", sub.SubscriptionID)
-		// Здесь нужно сравнить данные из `data` с текущими данными в `sub`
-		// и обновить нужные поля (статус, план, expires_at и т.д.)
-		// Пример: обновление статуса
-		newStatus, _ := data["status"].(string)
-		if newStatus != "" && newStatus != sub.Status {
-			s.log.Infow("Subscription status updated via webhook", "subscriptionID", sub.SubscriptionID, "oldStatus", sub.Status, "newStatus", newStatus)
-			sub.Status = newStatus
-			if newStatus == "canceled" && sub.CanceledAt == nil {
-				sub.CanceledAt = &now
-			}
-			needsUpdate = true
-			// TODO: Обновить PlanID, если он изменился?
-			// TODO: Опубликовать событие в Kafka? (subscription_updated)
-		} else {
-			s.log.Infow("No relevant changes detected in customer.subscription.updated event", "subscriptionID", sub.SubscriptionID)
+		subID := getStringValue(data, "id")
+		status := getStringValue(data, "status")
+		s.log.Infow("Webhook 'customer.subscription.updated' received. StripeSubID: %s, Status: %s", subID, status)
+		if subID == "" {
+			s.log.Errorw("StripeSubscriptionID missing in customer.subscription.updated event data")
+			return nil // Не можем обработать без ID
 		}
 
-	// TODO: Добавить обработку других важных событий:
-	// - checkout.session.completed (если используете Stripe Checkout для создания подписок)
-	// - customer.subscription.trial_will_end (уведомление о скором окончании триала)
-	// - ... другие события по необходимости ...
+		_, err := s.findAndUpdateSubscriptionStatus(ctx, subID, status, data)
+		if err != nil {
+			// Если подписка не найдена, это может быть проблемой
+			if errors.Is(err, ErrSubscriptionNotFound) {
+				s.log.Errorw("Received update for non-existent local subscription. StripeSubID: %s", subID)
+				return nil // Не повторять попытку для несуществующей подписки
+			}
+			return fmt.Errorf("failed processing subscription.updated: %w", err)
+		}
+
+	case "customer.subscription.deleted":
+		subID := getStringValue(data, "id")
+		status := getStringValue(data, "status") // Обычно 'canceled'
+		s.log.Infow("Webhook 'customer.subscription.deleted' (canceled) received. StripeSubID: %s, Status: %s", subID, status)
+		if subID == "" {
+			s.log.Errorw("StripeSubscriptionID missing in customer.subscription.deleted event data")
+			return nil
+		}
+
+		sub, err := s.findAndUpdateSubscriptionStatus(ctx, subID, "canceled", data) // Принудительно ставим 'canceled'
+		if err != nil {
+			if errors.Is(err, ErrSubscriptionNotFound) {
+				s.log.Errorw("Received deletion for non-existent local subscription. StripeSubID: %s", subID)
+				return nil
+			}
+			return fmt.Errorf("failed processing subscription.deleted: %w", err)
+		}
+
+		// Отправка события об отмене, если еще не отправляли из CancelSubscription
+		if s.kafkaProducer != nil && sub != nil {
+			// Создаем копию для события
+			eventSub := *sub
+			eventSub.Status = "canceled"    // Убедимся, что статус верный
+			if eventSub.CanceledAt == nil { // Установим время, если его нет
+				now := time.Now()
+				eventSub.CanceledAt = &now
+			}
+			go s.publishSubscriptionEvent(context.WithoutCancel(ctx), &eventSub)
+		}
+
+	case "customer.subscription.trial_will_end":
+		subID := getStringValue(data, "id")
+		userID := "" // Попробуем получить UserID
+		if sub, err := s.subRepo.GetByStripeSubscriptionID(ctx, subID); err == nil {
+			userID = sub.UserID
+		}
+		trialEndDate := getTimeValueFromUnix(data, "trial_end")
+		s.log.Infow("Webhook 'customer.subscription.trial_will_end' received. StripeSubID: %s, UserID: %s, TrialEnd: %s", subID, userID, trialEndDate)
+
+		// TODO: Отправить уведомление пользователю
+		// if s.notificationSvc != nil && userID != "" {
+		//     go s.notificationSvc.SendTrialEndingNotification(userID, subID, trialEndDate)
+		// }
+
+	case "invoice.payment_succeeded":
+		invoiceID := getStringValue(data, "id")
+		subID := getStringValue(data, "subscription")
+		customerID := getStringValue(data, "customer") // Stripe Customer ID
+		periodEnd := getTimeValueFromUnix(data, "period_end")
+
+		s.log.Infow("Webhook 'invoice.payment_succeeded' received. InvoiceID: %s, StripeSubID: %s, CustomerID: %s", invoiceID, subID, customerID)
+
+		if subID == "" {
+			s.log.Infow("Invoice %s is not related to a subscription, skipping.", invoiceID)
+			return nil // Не ошибка, просто инвойс не для подписки
+		}
+
+		sub, err := s.findAndUpdateSubscriptionStatus(ctx, subID, "active", data) // Оплата прошла -> статус должен быть active
+		if err != nil {
+			if errors.Is(err, ErrSubscriptionNotFound) {
+				s.log.Errorw("Received successful payment for non-existent local subscription. StripeSubID: %s", subID)
+				return nil
+			}
+			return fmt.Errorf("failed processing invoice.payment_succeeded for sub %s: %w", subID, err)
+		}
+		// Дополнительно можно обновить локальный expires_at, если он используется
+		if sub != nil && !periodEnd.IsZero() {
+			updated := false
+			if sub.ExpiresAt == nil || sub.ExpiresAt.Before(periodEnd) {
+				sub.ExpiresAt = &periodEnd
+				updated = true
+			}
+			if updated {
+				if err := s.subRepo.Update(ctx, sub); err != nil {
+					s.log.Errorw("Failed to update expires_at after successful payment. SubscriptionID: %s, Error: %v", sub.SubscriptionID, err)
+					// Не фатально, но стоит залогировать
+				} else {
+					s.log.Infow("Subscription expires_at updated. SubscriptionID: %s, New ExpiresAt: %s", sub.SubscriptionID, periodEnd)
+				}
+			}
+		}
+
+	case "invoice.payment_failed":
+		invoiceID := getStringValue(data, "id")
+		subID := getStringValue(data, "subscription")
+		customerID := getStringValue(data, "customer")
+		attemptCount := getInt64Value(data, "attempt_count")
+
+		s.log.Warnw("Webhook 'invoice.payment_failed' received. InvoiceID: %s, StripeSubID: %s, CustomerID: %s, Attempt: %d", invoiceID, subID, customerID, attemptCount)
+
+		if subID == "" {
+			s.log.Infow("Failed Invoice %s is not related to a subscription, skipping.", invoiceID)
+			return nil
+		}
+
+		// Определяем статус на основе конфигурации Stripe (dunning)
+		// Stripe может сам перевести подписку в 'past_due', 'unpaid', или 'canceled'
+		// Безопаснее всего - обновить статус на основе поля 'status' из самой подписки, если оно есть в data,
+		// или установить 'past_due' как индикатор проблемы.
+		newStatus := "past_due" // Статус по умолчанию при ошибке оплаты
+
+		_, err := s.findAndUpdateSubscriptionStatus(ctx, subID, newStatus, data) // Обновляем на 'past_due'
+		if err != nil {
+			if errors.Is(err, ErrSubscriptionNotFound) {
+				s.log.Errorw("Received failed payment for non-existent local subscription. StripeSubID: %s", subID)
+				return nil
+			}
+			return fmt.Errorf("failed processing invoice.payment_failed for sub %s: %w", subID, err)
+		}
+
+		// TODO: Отправить уведомление пользователю о проблеме с оплатой
+		// if s.notificationSvc != nil && sub != nil {
+		//     nextAttemptTime := time.Unix(nextPaymentAttemptUnix, 0)
+		//     go s.notificationSvc.SendPaymentFailedNotification(sub.UserID, subID, nextAttemptTime)
+		// }
 
 	default:
-		s.log.Infow("Unhandled event type", "eventType", eventType)
+		s.log.Infow("Unhandled webhook event type received: %s", eventType)
 	}
 
-	// 3. Обновить подписку в БД, если были изменения
-	if needsUpdate && sub != nil {
-		sub.UpdatedAt = now
-		if err := s.subRepo.Update(ctx, sub); err != nil {
-			s.log.Errorw("Failed to update subscription status in DB after webhook processing", "error", err, "subscriptionID", sub.SubscriptionID)
-			return ErrInternalServer // Возвращаем ошибку, чтобы Stripe ПОВТОРИЛ попытку
+	// Возвращаем nil, чтобы Stripe не повторял отправку успешно обработанного (или проигнорированного) события.
+	// Если произошла временная ошибка (например, БД недоступна), можно вернуть ошибку,
+	// чтобы Stripe попытался отправить вебхук позже.
+	return nil
+}
+
+// --- Вспомогательные функции ---
+
+// findAndUpdateSubscriptionStatus находит подписку по Stripe ID и обновляет ее статус и другие поля.
+// newStatus - желаемый статус, который будет установлен.
+// data - данные из объекта события Stripe (обычно объект subscription или invoice).
+func (s *PaymentService) findAndUpdateSubscriptionStatus(ctx context.Context, stripeSubscriptionID, newStatus string, data map[string]interface{}) (*models.Subscription, error) {
+	if stripeSubscriptionID == "" {
+		return nil, fmt.Errorf("stripeSubscriptionID is empty")
+	}
+
+	// 1. Найти подписку в локальной БД
+	sub, err := s.subRepo.GetByStripeSubscriptionID(ctx, stripeSubscriptionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			s.log.Warnw("Subscription not found in local DB by StripeSubID: %s", stripeSubscriptionID)
+			return nil, ErrSubscriptionNotFound // Возвращаем кастомную ошибку
 		}
-		s.log.Infow("Subscription updated successfully in DB after webhook", "subscriptionID", sub.SubscriptionID, "newStatus", sub.Status)
+		s.log.Errorw("Failed to get subscription from repository by StripeSubID: %s. Error: %v", stripeSubscriptionID, err)
+		return nil, fmt.Errorf("%w: repository error: %v", ErrInternalServer, err)
 	}
 
-	return nil // Возвращаем nil, чтобы подтвердить успешную обработку Stripe
+	// 2. Подготовить обновления
+	needsUpdate := false
+	now := time.Now()
+
+	// Обновляем статус, если он отличается или если пришел статус отмены
+	if sub.Status != newStatus || newStatus == "canceled" {
+		sub.Status = newStatus
+		needsUpdate = true
+		s.log.Infow("Updating subscription status. StripeSubID: %s, NewStatus: %s", stripeSubscriptionID, newStatus)
+	}
+
+	// Обновляем ID плана, если он изменился (из subscription.updated)
+	// Путь к ID плана: plan -> id или items -> data -> [0] -> price -> id
+	newPlanID := extractPlanIDFromWebhookData(data)
+	if newPlanID != "" && sub.PlanID != newPlanID {
+		sub.PlanID = newPlanID
+		needsUpdate = true
+		s.log.Infow("Updating subscription plan ID. StripeSubID: %s, NewPlanID: %s", stripeSubscriptionID, newPlanID)
+	}
+
+	// Обновляем время окончания текущего периода (из subscription.updated или invoice.paid)
+	currentPeriodEnd := getTimeValueFromUnix(data, "current_period_end")
+	if !currentPeriodEnd.IsZero() {
+		// Обновляем ExpiresAt, если оно не установлено или раньше новой даты
+		if sub.ExpiresAt == nil || sub.ExpiresAt.Before(currentPeriodEnd) {
+			sub.ExpiresAt = &currentPeriodEnd
+			needsUpdate = true
+			s.log.Infow("Updating subscription expires_at. StripeSubID: %s, NewExpiresAt: %s", stripeSubscriptionID, currentPeriodEnd)
+		}
+	}
+
+	// Обновляем время фактической отмены (из subscription.updated/deleted)
+	canceledAt := getTimeValueFromUnix(data, "canceled_at")
+	if !canceledAt.IsZero() && (sub.CanceledAt == nil || !sub.CanceledAt.Equal(canceledAt)) {
+		sub.CanceledAt = &canceledAt
+		sub.Status = "canceled" // Убедимся, что статус тоже "canceled"
+		needsUpdate = true
+		s.log.Infow("Updating subscription canceled_at. StripeSubID: %s, CanceledAt: %s", stripeSubscriptionID, canceledAt)
+	}
+
+	// Если были изменения, обновляем запись в БД
+	if needsUpdate {
+		sub.UpdatedAt = now // Устанавливаем время обновления
+		err = s.subRepo.Update(ctx, sub)
+		if err != nil {
+			s.log.Errorw("Failed to update subscription in repository. StripeSubID: %s, Error: %v", stripeSubscriptionID, err)
+			return sub, fmt.Errorf("%w: failed to save subscription update: %v", ErrInternalServer, err)
+		}
+		s.log.Infow("Subscription updated successfully in local DB. StripeSubID: %s", stripeSubscriptionID)
+	} else {
+		s.log.Infow("No updates needed for subscription in local DB. StripeSubID: %s", stripeSubscriptionID)
+	}
+
+	return sub, nil
 }
 
-// isSubscriptionEvent - простая проверка, относится ли тип события к подписке
-// (можно сделать более точной)
-func (s *PaymentService) isSubscriptionEvent(eventType stripe2.EventType) bool {
-	return eventType == "customer.subscription.created" ||
-		eventType == "customer.subscription.updated" ||
-		eventType == "customer.subscription.deleted" ||
-		eventType == "invoice.paid" || // Косвенно относится к подписке
-		eventType == "invoice.payment_failed" // Косвенно относится к подписке
+// extractPlanIDFromWebhookData пытается извлечь Price ID из данных вебхука.
+func extractPlanIDFromWebhookData(data map[string]interface{}) string {
+	// Попробовать извлечь из 'plan.id' (старый формат)
+	if plan, ok := data["plan"].(map[string]interface{}); ok {
+		if planID, ok := plan["id"].(string); ok && planID != "" {
+			return planID
+		}
+	}
+	// Попробовать извлечь из 'items.data[0].price.id' (новый формат)
+	if items, ok := data["items"].(map[string]interface{}); ok {
+		if itemsData, ok := items["data"].([]interface{}); ok && len(itemsData) > 0 {
+			if firstItem, ok := itemsData[0].(map[string]interface{}); ok {
+				if price, ok := firstItem["price"].(map[string]interface{}); ok {
+					if priceID, ok := price["id"].(string); ok && priceID != "" {
+						return priceID
+					}
+				}
+			}
+		}
+	}
+	return "" // Не найден
 }
 
-// calculateExpiresAt - примерная функция для вычисления времени окончания
-// (требует разбора данных из события invoice.paid)
-// func (s *PaymentService) calculateExpiresAt(data map[string]interface{}) *time.Time {
-// 	lines, ok := data["lines"].(map[string]interface{})
-// 	if !ok { return nil }
-// 	lineData, ok := lines["data"].([]interface{})
-// 	if !ok || len(lineData) == 0 { return nil }
-// 	firstLine, ok := lineData[0].(map[string]interface{})
-// 	if !ok { return nil }
-// 	period, ok := firstLine["period"].(map[string]interface{})
-// 	if !ok { return nil }
-// 	end, ok := period["end"].(float64) // Время в Unix timestamp
-// 	if !ok { return nil }
-// 	expires := time.Unix(int64(end), 0)
-// 	return &expires
-// }
+// getStringValue безопасно извлекает строковое значение из map[string]interface{}.
+func getStringValue(data map[string]interface{}, key string) string {
+	if val, ok := data[key].(string); ok {
+		return val
+	}
+	return ""
+}
+
+// getInt64Value безопасно извлекает int64 значение из map[string]interface{}.
+// Stripe часто возвращает числа как float64, даже если они целые.
+func getInt64Value(data map[string]interface{}, key string) int64 {
+	if val, ok := data[key]; ok {
+		switch v := val.(type) {
+		case float64:
+			return int64(v)
+		case int64:
+			return v
+		case json.Number: // Если используется json.Unmarshal с UseNumber()
+			i, err := v.Int64()
+			if err == nil {
+				return i
+			}
+		}
+	}
+	return 0
+}
+
+// getFloat64Value безопасно извлекает float64 значение.
+func getFloat64Value(data map[string]interface{}, key string) float64 {
+	if val, ok := data[key]; ok {
+		switch v := val.(type) {
+		case float64:
+			return v
+		case int64:
+			return float64(v)
+		case json.Number:
+			f, err := v.Float64()
+			if err == nil {
+				return f
+			}
+		}
+	}
+	return 0.0
+}
+
+// getTimeValueFromUnix безопасно извлекает время из Unix timestamp (int64 или float64).
+func getTimeValueFromUnix(data map[string]interface{}, key string) time.Time {
+	unixTimestamp := getInt64Value(data, key)
+	if unixTimestamp > 0 {
+		return time.Unix(unixTimestamp, 0).UTC() // Возвращаем в UTC
+	}
+	return time.Time{} // Возвращаем нулевое время, если ключ не найден или 0
+}

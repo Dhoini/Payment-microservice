@@ -9,35 +9,26 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// App представляет собой контейнер для всех компонентов приложения
 type App struct {
 	Config           *config.Config
 	PaymentService   *services.PaymentService
 	PaymentHandler   *handlers.PaymentHandler
 	WebhookHandler   *handlers.WebhookHandler
-	AuthMiddleware   *middleware.AuthMiddleware
+	AuthMiddleware   *middleware.JWTMiddleware
 	LoggerMiddleware gin.HandlerFunc
 	Logger           *logger.Logger
 }
 
-// NewApp создает и инициализирует новый экземпляр приложения
-func NewApp(cfg *config.Config, paymentService *services.PaymentService, log *logger.Logger) *App {
-	// Инициализируем обработчики HTTP
+func NewApp(cfg *config.Config, paymentService *services.PaymentService, log *logger.Logger, validator middleware.TokenValidator) *App {
 	paymentHandler := handlers.NewPaymentHandler(paymentService, log)
 
-	// Инициализируем обработчик вебхуков
 	webhookHandler, err := handlers.NewWebhookHandler(cfg, paymentService, log)
 	if err != nil {
 		log.Fatalw("Failed to initialize webhook handler", "error", err)
 	}
 
-	// Инициализируем middleware аутентификации
-	authMiddleware, err := middleware.NewAuthMiddleware(cfg, log)
-	if err != nil {
-		log.Fatalw("Failed to initialize auth middleware", "error", err)
-	}
+	authMiddleware := middleware.NewJWTMiddleware(cfg, log, validator)
 
-	// Инициализируем middleware логирования
 	loggerMiddleware := middleware.RequestLogger(log)
 
 	return &App{

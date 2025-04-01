@@ -2,7 +2,9 @@ package req
 
 import (
 	"encoding/json"
+	"github.com/Dhoini/Payment-microservice/pkg/logger"
 	"github.com/Dhoini/Payment-microservice/pkg/res"
+	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 	"go.uber.org/zap"
 	"io"
@@ -26,17 +28,17 @@ func IsValid[T any](payload T) error {
 }
 
 // HandleBody декодирует, валидирует и обрабатывает тело запроса.
-func HandleBody[T any](w *http.ResponseWriter, r *http.Request, log *zap.Logger) (*T, error) {
+func HandleBody[T any](w *gin.ResponseWriter, r *http.Request, log *logger.Logger) (*T, error) {
 	body, err := Decode[T](r.Body)
 	if err != nil {
-		log.Error("Ошибка декодирования тела запроса", zap.Error(err)) // Добавляем логирование
+		log.Errorw("Ошибка декодирования тела запроса", zap.Error(err)) // Добавляем логирование
 		res.JsonResponse(*w, res.ErrorResponse{Error: "Некорректный формат запроса"}, http.StatusUnprocessableEntity)
 		return nil, err
 	}
 
 	err = IsValid(body)
 	if err != nil {
-		log.Error("Ошибка валидации тела запроса", zap.Error(err)) // Добавляем логирование
+		log.Errorw("Ошибка валидации тела запроса", zap.Error(err)) // Добавляем логирование
 		res.JsonResponse(*w, res.ErrorResponse{Error: "Некорректные данные запроса"}, http.StatusUnprocessableEntity)
 		return nil, err
 	}
