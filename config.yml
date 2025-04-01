@@ -4,17 +4,17 @@ app:
 database:
   dsn: "postgres://admin:secretPass@postgres:5432/payment?sslmode=disable"
 redis:
-  addr: "localhost:6379"
+  addr: "redis:6379"
   password: ""
   db: 0
 kafka:
-  brokers: ["localhost:9092"]
+  brokers: ["kafka:9092"]
   topic: "payment_topic"
   groupId: "payment_group"
 stripe:
-  apiKey: "sk_test_YourSecretKeyHere"
-  webhookSecret: "whsec_YourWebhookSigningSecretHere" #
+  apiKey: "pk_test_51R7F09P07FtQORWHCPYBo7DIDhRZSRi5f5anVcbkpCbxg0JENExkbbLQmiFKbKQz5DbSxPcX6jvdHYJkiA8zFuZv00zuTLlm5T"
+  webhookSecret: "whsec_eEfmVAGAfaq2zlhjKFpiUPRy2Aye3YvV"
 grpc:
   port: "50051"
 auth:
-  jwtSecret: "YourVerySecretKeyHere" # Замените на ваш СЕКРЕТНЫЙ ключ!
+  jwtSecret: "ElDDnGrruIqcnMEu4Gqzh8OKMikv0DZsHa8YSqYTQ9U"

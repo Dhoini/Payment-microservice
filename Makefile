@@ -45,9 +45,10 @@ migrate-create: migrate-check ## Создать новую миграцию (mak
 	echo "Создание миграции с именем: $$name"; \
 	$(MIGRATE_BIN) create -ext sql -dir $(MIGRATIONS_DIR) -seq $$name
 
-migrate-up: migrate-check ## Применить все новые миграции
-	@echo "Применение миграций к БД: $(DB_DSN)"
-	$(MIGRATE_BIN) -database "$(DB_DSN)" -path $(MIGRATIONS_PATH) up
+# Example (replace DB_URL with your actual database connection variable if needed)
+migrate-up:
+	@echo "Применение миграций к БД: $(DB_URL)"
+	migrate -database "$(DB_URL)" -path file://migrations up
 
 migrate-up-one: migrate-check ## Применить следующую миграцию
 	@echo "Применение следующей миграции к БД: $(DB_DSN)"
