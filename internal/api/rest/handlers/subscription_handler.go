@@ -251,3 +251,148 @@ func (h *SubscriptionHandler) ResumeSubscription(c *gin.Context) {
 	h.log.Info("Resumed subscription with ID: %s", id)
 	c.JSON(http.StatusOK, subscription)
 }
+
+// GetPlans returns all subscription plans
+func (h *SubscriptionHandler) GetPlans(c *gin.Context) {
+	plans, err := h.planSvc.GetAllPlans(c.Request.Context())
+	if err != nil {
+		h.log.Error("Failed to get subscription plans: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subscription plans"})
+		return
+	}
+
+	h.log.Info("Returned %d subscription plans", len(plans))
+	c.JSON(http.StatusOK, plans)
+}
+
+// GetPlan returns a subscription plan by ID
+func (h *SubscriptionHandler) GetPlan(c *gin.Context) {
+	id := c.Param("id")
+
+	plan, err := h.planSvc.GetPlanByID(c.Request.Context(), id)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			h.log.Warn("Subscription plan not found: %s", id)
+			c.JSON(http.StatusNotFound, gin.H{"error": "Subscription plan not found"})
+			return
+		}
+
+		if err == repository.ErrInvalidData {
+			h.log.Warn("Invalid UUID format: %s", id)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid subscription plan ID format"})
+			return
+		}
+
+		h.log.Error("Failed to get subscription plan: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subscription plan"})
+		return
+	}
+
+	h.log.Info("Returned subscription plan with ID: %s", id)
+	c.JSON(http.StatusOK, plan)
+}
+
+// CreatePlan creates a new subscription plan
+func (h *SubscriptionHandler) CreatePlan(c *gin.Context) {
+	var req domain.SubscriptionPlanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.log.Warn("Invalid request: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	plan, err := h.planSvc.CreatePlan(c.Request.Context(), req)
+	if err != nil {
+		if err == repository.ErrDuplicate {
+			h.log.Warn("Subscription plan with this name already exists")
+			c.JSON(http.StatusConflict, gin.H{"error": "Subscription plan with this name already exists"})
+			return
+		}
+
+		if err == repository.ErrInvalidData {
+			h.log.Warn("Invalid data in request")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid data in request"})
+			return
+		}
+
+		h.log.Error("Failed to create subscription plan: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create subscription plan"})
+		return
+	}
+
+	h.log.Info("Created subscription plan with ID: %s", plan.ID)
+	c.JSON(http.StatusCreated, plan)
+}
+
+// UpdatePlan updates an existing subscription plan
+func (h *SubscriptionHandler) UpdatePlan(c *gin.Context) {
+	id := c.Param("id")
+
+	var req domain.SubscriptionPlanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.log.Warn("Invalid request: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	plan, err := h.planSvc.UpdatePlan(c.Request.Context(), id, req)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			h.log.Warn("Subscription plan not found: %s", id)
+			c.JSON(http.StatusNotFound, gin.H{"error": "Subscription plan not found"})
+			return
+		}
+
+		if err == repository.ErrInvalidData {
+			h.log.Warn("Invalid UUID format or data: %s", id)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid subscription plan ID format or data"})
+			return
+		}
+
+		if err == repository.ErrDuplicate {
+			h.log.Warn("Subscription plan with this name already exists")
+			c.JSON(http.StatusConflict, gin.H{"error": "Subscription plan with this name already exists"})
+			return
+		}
+
+		h.log.Error("Failed to update subscription plan: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update subscription plan"})
+		return
+	}
+
+	h.log.Info("Updated subscription plan with ID: %s", plan.ID)
+	c.JSON(http.StatusOK, plan)
+}
+
+// DeletePlan deletes a subscription plan
+func (h *SubscriptionHandler) DeletePlan(c *gin.Context) {
+	id := c.Param("id")
+
+	err := h.planSvc.DeletePlan(c.Request.Context(), id)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			h.log.Warn("Subscription plan not found: %s", id)
+			c.JSON(http.StatusNotFound, gin.H{"error": "Subscription plan not found"})
+			return
+		}
+
+		if err == repository.ErrInvalidData {
+			h.log.Warn("Invalid UUID format: %s", id)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid subscription plan ID format"})
+			return
+		}
+
+		if err == domain.ErrInvalidOperation {
+			h.log.Warn("Cannot delete plan with active subscriptions: %s", id)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot delete plan with active subscriptions"})
+			return
+		}
+
+		h.log.Error("Failed to delete subscription plan: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete subscription plan"})
+		return
+	}
+
+	h.log.Info("Deleted subscription plan with ID: %s", id)
+	c.JSON(http.StatusOK, gin.H{"message": "Subscription plan deleted successfully"})
+}
