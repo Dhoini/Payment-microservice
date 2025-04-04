@@ -33,7 +33,6 @@ payment-service
 
 # Артефакты сборки
 /bin/
-/pkg/ # Если используется для платформо-зависимых пакетов
 /dist/
 /build/
 
@@ -102,3 +101,5 @@ lerna-debug.log*
 *config.yml
 
 # === Прочее ===
+
+.qodo

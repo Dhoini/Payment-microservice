@@ -11,9 +11,12 @@ services:
       - APP_ENV=development
       - LOG_LEVEL=debug
     depends_on:
-      - postgres
-      - kafka
-      - zookeeper
+      postgres: # Указываем зависимость от сервиса postgres
+        condition: service_healthy # Ждем, пока healthcheck не станет успешным
+      kafka:
+        condition: service_started # Для Kafka/Zookeeper обычно достаточно service_started
+      zookeeper:
+        condition: service_started
     volumes:
       - ./config.yml:/app/config.yml
     restart: unless-stopped
@@ -34,6 +37,12 @@ services:
       - ./migrations:/docker-entrypoint-initdb.d  # Раскомментируйте для инициализации БД при старте
     networks:
       - payment-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d payment"] # Проверяем готовность для юзера 'admin' и базы 'payment'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0

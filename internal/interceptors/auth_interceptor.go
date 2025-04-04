@@ -65,12 +65,14 @@ func (i *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 			return nil, status.Errorf(codes.Unauthenticated, "invalid token: %v", err)
 		}
 
-		// Добавляем userID в контекст для использования в обработчиках
-		newCtx := context.WithValue(ctx, middleware.ContextUserIDKey, claims.UserID)
-		// Корректное логирование
-		i.log.Debugw("User authenticated via gRPC. UserID: %s, Method: %s", claims.UserID, info.FullMethod)
-
-		// Передаем управление следующему интерцептору или самому обработчику
+		userID := claims.Subject // Используем Subject (sub)
+		if userID == "" {
+			i.log.Warnw("gRPC Auth: User ID (sub) missing in token for method %s", info.FullMethod)
+			return nil, status.Errorf(codes.Unauthenticated, "User ID (sub) missing in token")
+		}
+		// Добавляем userID из 'sub' в контекст
+		newCtx := context.WithValue(ctx, middleware.ContextUserIDKey, userID)
+		i.log.Debugw("User authenticated via gRPC. UserID (from sub): %s, Method: %s", userID, info.FullMethod)
 		return handler(newCtx, req)
 	}
 }

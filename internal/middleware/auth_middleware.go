@@ -28,7 +28,6 @@ type TokenValidator interface {
 }
 
 type TokenClaims struct {
-	UserID    string `json:"user_id"`
 	UserEmail string `json:"email"`
 	Scope     string `json:"scope"`
 	jwt.RegisteredClaims
@@ -68,11 +67,17 @@ func (m *JWTMiddleware) RequireAuth(requiredScopes ...string) gin.HandlerFunc {
 			return
 		}
 
+		userID := claims.Subject
+		if userID == "" {
+			m.handleAuthError(c, "User ID (sub) missing in token")
+			return
+		}
+
 		// Используем определенный ключ контекста
-		c.Set(string(ContextUserIDKey), claims.UserID)
+		c.Set(string(ContextUserIDKey), userID)
 		c.Set("userEmail", claims.UserEmail) // Можно также добавить email в контекст, если нужно
 		// Корректное логирование для вашего логгера
-		m.log.Debugw("User authenticated via HTTP. UserID: %s", claims.UserID)
+		m.log.Debugw("User authenticated via HTTP. UserID: %s", userID)
 		c.Next()
 	}
 }

@@ -14,12 +14,3 @@ type Subscription struct {
 	ExpiresAt        *time.Time `db:"expires_at" json:"expires_at,omitempty"`       // Время окончания подписки (если применимо)
 	CanceledAt       *time.Time `db:"canceled_at" json:"canceled_at,omitempty"`     // Время отмены подписки
 }
-
-// Может понадобиться структура для Customer, если вы будете хранить их отдельно
-// type Customer struct {
-//  UserID         string    `db:"user_id"`
-//  StripeCustomerID string `db:"stripe_customer_id"`
-//  Email          string    `db:"email"`
-//  CreatedAt      time.Time `db:"created_at"`
-//  UpdatedAt      time.Time `db:"updated_at"`
-// }

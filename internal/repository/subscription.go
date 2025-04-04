@@ -26,11 +26,3 @@ type SubscriptionRepository interface {
 	// FindActiveByUserID(ctx context.Context, userID string) (*models.Subscription, error)
 	// Delete(ctx context.Context, subscriptionID string) error
 }
-
-// Возможно, понадобится интерфейс для работы с клиентами (Customer)
-// type CustomerRepository interface {
-// 	Create(ctx context.Context, customer *models.Customer) error
-// 	GetByUserID(ctx context.Context, userID string) (*models.Customer, error)
-// 	GetByStripeID(ctx context.Context, stripeID string) (*models.Customer, error)
-//  Update(ctx context.Context, customer *models.Customer) error
-// }

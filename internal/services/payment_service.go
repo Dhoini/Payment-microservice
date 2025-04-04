@@ -58,6 +58,7 @@ type CreateSubscriptionOutput struct {
 type PaymentService struct {
 	cfg           *config.Config
 	subRepo       repository.SubscriptionRepository
+	customerRepo  repository.CustomerRepository
 	stripeClient  stripe.Client
 	kafkaProducer kafka.Producer // Может быть nil, если Kafka недоступен
 	log           *logger.Logger
@@ -485,9 +486,9 @@ func (s *PaymentService) HandleWebhookEvent(ctx context.Context, eventType strip
 		s.log.Infow("Webhook 'customer.subscription.trial_will_end' received. StripeSubID: %s, UserID: %s, TrialEnd: %s", subID, userID, trialEndDate)
 
 		// TODO: Отправить уведомление пользователю
-		// if s.notificationSvc != nil && userID != "" {
-		//     go s.notificationSvc.SendTrialEndingNotification(userID, subID, trialEndDate)
-		// }
+		//if s.notificationSvc != nil && userID != "" {
+		//    go s.notificationSvc.SendTrialEndingNotification(userID, subID, trialEndDate)
+		//}
 
 	case "invoice.payment_succeeded":
 		invoiceID := getStringValue(data, "id")
@@ -669,6 +670,65 @@ func extractPlanIDFromWebhookData(data map[string]interface{}) string {
 		}
 	}
 	return "" // Не найден
+}
+func (s *PaymentService) CreateCustomer(ctx context.Context, userID, email string) (*models.Customer, error) {
+	// Проверяем, существует ли уже customer
+	if existing, err := s.customerRepo.GetByUserID(ctx, userID); err == nil {
+		return existing, nil
+	} else if err != repository.ErrCustomerNotFound {
+		return nil, fmt.Errorf("failed to check existing customer: %w", err)
+	}
+
+	// Создаем customer в Stripe
+	stripeCustomerID, err := s.stripeClient.CreateCustomer(ctx, userID, email)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stripe customer: %w", err)
+	}
+
+	// Создаем customer в локальной БД
+	customer := models.NewCustomer(userID, stripeCustomerID, email)
+	if err := s.customerRepo.Create(ctx, customer); err != nil {
+		// Логируем ошибку, но не удаляем customer из Stripe,
+		// так как он может быть использован позже
+		s.log.Errorw("Failed to create customer in local DB",
+			"error", err,
+			"userID", userID,
+			"stripeCustomerID", stripeCustomerID)
+		return nil, fmt.Errorf("failed to create customer in local DB: %w", err)
+	}
+
+	return customer, nil
+}
+
+func (s *PaymentService) GetOrCreateCustomer(ctx context.Context, userID, email string) (*models.Customer, error) {
+	// Пытаемся найти существующего customer
+	customer, err := s.customerRepo.GetByUserID(ctx, userID)
+	if err == nil {
+		return customer, nil
+	}
+	if err != repository.ErrCustomerNotFound {
+		return nil, fmt.Errorf("failed to get customer: %w", err)
+	}
+
+	// Если не нашли, создаем нового
+	return s.CreateCustomer(ctx, userID, email)
+}
+
+func (s *PaymentService) UpdateCustomerEmail(ctx context.Context, userID, newEmail string) error {
+	customer, err := s.customerRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to get customer: %w", err)
+	}
+
+	// Обновляем email в локальной БД
+	customer.Email = newEmail
+	customer.UpdatedAt = time.Now()
+
+	if err := s.customerRepo.Update(ctx, customer); err != nil {
+		return fmt.Errorf("failed to update customer: %w", err)
+	}
+
+	return nil
 }
 
 // getStringValue безопасно извлекает строковое значение из map[string]interface{}.
