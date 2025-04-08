@@ -68,7 +68,7 @@ $RECYCLE.BIN/
 
 # === IDE и Редакторы ===
 # JetBrains / GoLand
-.idea/
+.idea
 *.iml
 
 # VS Code

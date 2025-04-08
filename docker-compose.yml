@@ -68,6 +68,12 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    command: "bash -c ' \
+            kafka-topics.sh --create --topic subscription_created --partitions 3 --replication-factor 1 --if-not-exists --bootstrap-server kafka:29092; \
+            kafka-topics.sh --create --topic payment_events --partitions 1 --replication-factor 1 --if-not-exists --bootstrap-server kafka:29092; \
+            kafka-topics.sh --create --topic subscription_canceled -- partitions 2 --replication-factor 1 --if-not-exists --bootstrap-server kafka:29092; \
+           /etc/confluent/docker/run \
+            '"
     networks:
       - payment-network
 

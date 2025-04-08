@@ -150,14 +150,12 @@ func (s *PaymentService) CreateSubscription(ctx context.Context, input CreateSub
 	}
 
 	// Опционально: Синхронное сохранение в БД (если нужно)
-	// err = s.subRepo.Create(ctx, subscription)
-	// if err != nil {
-	//     s.log.Errorw("Failed to save subscription to local DB synchronously. UserID: %s, StripeSubID: %s, Error: %v", input.UserID, stripeSubID, err)
-	//     // Решить, является ли это фатальной ошибкой для потока
-	//     // Можно попытаться откатить Stripe (сложно) или просто вернуть ошибку
-	//     return nil, fmt.Errorf("%w: failed to save subscription locally: %v", ErrInternalServer, err)
-	// }
-	// s.log.Infow("Subscription saved to local DB synchronously. UserID: %s, StripeSubID: %s", input.UserID, stripeSubID)
+	err = s.subRepo.Create(ctx, subscription)
+	if err != nil {
+		s.log.Errorw("Failed to save subscription to local DB synchronously. UserID: %s, StripeSubID: %s, Error: %v", input.UserID, stripeSubID, err)
+		return nil, fmt.Errorf("%w: failed to save subscription locally: %v", ErrInternalServer, err)
+	}
+	s.log.Infow("Subscription saved to local DB synchronously. UserID: %s, StripeSubID: %s", input.UserID, stripeSubID)
 
 	// Асинхронная отправка события в Kafka (если продюсер доступен)
 	if s.kafkaProducer != nil {
@@ -557,10 +555,10 @@ func (s *PaymentService) HandleWebhookEvent(ctx context.Context, eventType strip
 		}
 
 		// TODO: Отправить уведомление пользователю о проблеме с оплатой
-		// if s.notificationSvc != nil && sub != nil {
-		//     nextAttemptTime := time.Unix(nextPaymentAttemptUnix, 0)
-		//     go s.notificationSvc.SendPaymentFailedNotification(sub.UserID, subID, nextAttemptTime)
-		// }
+		//if s.notificationSvc != nil && sub != nil {
+		//    nextAttemptTime := time.Unix(nextPaymentAttemptUnix, 0)
+		//    go s.notificationSvc.SendPaymentFailedNotification(sub.UserID, subID, nextAttemptTime)
+		//}
 
 	default:
 		s.log.Infow("Unhandled webhook event type received: %s", eventType)
