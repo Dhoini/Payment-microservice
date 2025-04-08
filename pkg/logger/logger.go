@@ -88,7 +88,7 @@ func (l *Logger) log(level LogLevel, format string, v ...interface{}) {
 		return
 	}
 
-	file, line := getCallerInfo(2)
+	file, line := getCallerInfo(4)
 	msg := fmt.Sprintf(format, v...)
 	color := colorForLevel(level)
 	timestamp := time.Now().Format("2006-01-02 15:04:05") // Добавляем временную метку

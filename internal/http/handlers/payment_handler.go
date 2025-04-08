@@ -109,8 +109,7 @@ func (h *PaymentHandler) CreateSubscription(c *gin.Context) {
 		SubscriptionID: output.Subscription.SubscriptionID,
 		Status:         output.Subscription.Status,
 		ClientSecret:   output.ClientSecret,
-		CreatedAt:      output.Subscription.CreatedAt.Format(time.RFC3339),
-	}
+		CreatedAt:      time.Now().Format(time.RFC3339)}
 
 	res.JsonResponse(c.Writer, response, http.StatusCreated)
 	h.log.Infow("Handler CreateSubscription finished successfully. UserID: %s, SubscriptionID: %s", userID, response.SubscriptionID)

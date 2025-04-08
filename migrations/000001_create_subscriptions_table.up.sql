@@ -1,7 +1,7 @@
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS subscriptions (
-                                             subscription_id VARCHAR(255) PRIMARY KEY,
+    subscription_id VARCHAR(255) PRIMARY KEY,
     user_id VARCHAR(255) NOT NULL,
     plan_id VARCHAR(255) NOT NULL,
     status VARCHAR(50) NOT NULL,
