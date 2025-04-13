@@ -104,6 +104,18 @@ func main() {
 	// Инициализируем клиент Stripe
 	stripeClient := stripe.NewStripeClient(cfg.Stripe.APIKey, log)
 
+	if len(cfg.Kafka.Brokers) > 0 {
+		// Используем функцию из пакета kafka
+		err = kafka.EnsureKafkaTopics(cfg.Kafka.Brokers, log) // <--- ИЗМЕНЕННЫЙ ВЫЗОВ
+		if err != nil {
+			log.Errorw("Failed to ensure Kafka topics exist, proceeding...", "error", err)
+		} else {
+			log.Infow("Kafka topics ensured successfully.")
+		}
+	} else {
+		log.Warnw("Kafka brokers not configured, skipping topic creation.")
+	}
+
 	// Инициализируем Kafka Producer
 	kafkaProducer, err := kafka.NewKafkaProducer(cfg.Kafka.Brokers, log)
 	if err != nil {

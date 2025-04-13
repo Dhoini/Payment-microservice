@@ -59,7 +59,8 @@ services:
     ports:
       - "9092:9092"
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_started # Достаточно для Zookeeper
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -67,29 +68,26 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-    command: "bash -c ' \
-            kafka-topics.sh --create --topic subscription_created --partitions 3 --replication-factor 1 --if-not-exists --bootstrap-server kafka:29092; \
-            kafka-topics.sh --create --topic payment_events --partitions 1 --replication-factor 1 --if-not-exists --bootstrap-server kafka:29092; \
-            kafka-topics.sh --create --topic subscription_canceled -- partitions 2 --replication-factor 1 --if-not-exists --bootstrap-server kafka:29092; \
-           /etc/confluent/docker/run \
-            '"
+      # KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true" # Можно оставить true для разработки, но лучше создавать явно
+      # --- ПЕРЕМЕННЫЕ ДЛЯ ПУТЕЙ ЛОГОВ ---
+      KAFKA_LOG4J_LOGGERS: "kafka.authorizer.logger=WARN, authorizerAppender" # Пример, если вы используете authorizer
+      KAFKA_AUTHORIZER_LOG_DIR: "/var/lib/kafka/data/logs" # Путь для логов авторизации
+      KAFKA_LOG_CLEANER_LOG_DIR: "/var/lib/kafka/data/logs" # Путь для логов очистки
+      KAFKA_STATE_CHANGE_LOG_DIR: "/var/lib/kafka/data/logs" # Путь для логов изменения состояния
+      KAFKA_SERVER_LOG_DIR: "/var/lib/kafka/data/logs" # Путь для основных логов сервера
+      KAFKA_CONTROLLER_LOG_DIR: "/var/lib/kafka/data/logs" # Путь для логов контроллера
+      # --- КОНЕЦ ПЕРЕМЕННЫХ ДЛЯ ПУТЕЙ ЛОГОВ ---
+    command: /etc/confluent/docker/run
     networks:
       - payment-network
+    # Добавляем healthcheck, чтобы другие сервисы могли его дождаться (опционально)
+    healthcheck:
+      test: [ "CMD", "cub", "kafka-ready", "-b", "kafka:29092", "1", "5" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
-  kafka-ui:
-    image: provectuslabs/kafka-ui:latest
-    container_name: payment-kafka-ui
-    ports:
-      - "8081:8080"
-    depends_on:
-      - kafka
-    environment:
-      KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
-      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
-    networks:
-      - payment-network
+
 
   redis:
     image: redis:7-alpine

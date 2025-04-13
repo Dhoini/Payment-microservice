@@ -23,6 +23,6 @@ type SubscriptionRepository interface {
 	GetByStripeSubscriptionID(ctx context.Context, stripeSubscriptionID string) (*models.Subscription, error)
 
 	// Возможно, понадобятся другие методы, например:
-	// FindActiveByUserID(ctx context.Context, userID string) (*models.Subscription, error)
-	// Delete(ctx context.Context, subscriptionID string) error
+	//FindActiveByUserID(ctx context.Context, userID string) (*models.Subscription, error)
+	//Delete(ctx context.Context, subscriptionID string) error
 }
